@@ -139,4 +139,12 @@ public class MusicPlayer {
             }
         }
     }
+
+    public long getTotalMicroseconds() {
+        return microsecondLength;
+    }
+
+    public boolean isInitialized() {
+        return clip != null;
+    }
 }
