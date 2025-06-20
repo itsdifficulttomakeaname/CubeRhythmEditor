@@ -241,18 +241,8 @@ public class MainWindow extends JFrame {
         // 创建顶部菜单栏
         JMenuBar menuBar = new JMenuBar();
         
-        // "菜单"选项
-        JMenu fileMenu = new JMenu("菜单");
-        JMenuItem importSongMenuItem = new JMenuItem("导入歌曲");
-        importSongMenuItem.addActionListener(e -> {
-            importSong();
-            SwingUtilities.invokeLater(() -> requestFocusInWindow()); // 导入歌曲后重新获取焦点
-        });
-        fileMenu.add(importSongMenuItem);
-        menuBar.add(fileMenu);
-
         // "拍数"选项
-        beatsMenu = new JMenu("拍数"); // Assign to member variable
+        beatsMenu = new JMenu("拍数");
         ButtonGroup beatsButtonGroup = new ButtonGroup();
         int[] beatOptions = {1, 2, 3, 4, 6, 8, 16, 24, 32};
         for (int beats : beatOptions) {
@@ -262,14 +252,42 @@ public class MainWindow extends JFrame {
             rbMenuItem.addActionListener(e -> {
                 beatCalculator.setBeatsPerMeasure(beats);
                 logManager.log("切换拍数: " + beats);
-                SwingUtilities.invokeLater(() -> requestFocusInWindow()); // 选择拍数后重新获取焦点
+                SwingUtilities.invokeLater(() -> requestFocusInWindow());
             });
-            if (beats == beatCalculator.getBeatsPerMeasure()) { // 默认选中4拍
+            if (beats == beatCalculator.getBeatsPerMeasure()) {
                 rbMenuItem.setSelected(true);
             }
         }
         menuBar.add(beatsMenu);
-        
+
+        // "更新间隔"选项
+        JMenu intervalMenu = new JMenu("更新间隔");
+        double[] intervals = {50, 33.3, 16.7, 10, 8.3};
+        ButtonGroup intervalGroup = new ButtonGroup();
+        for (double interval : intervals) {
+            String label = interval + " ms";
+            JRadioButtonMenuItem item = new JRadioButtonMenuItem(label);
+            intervalGroup.add(item);
+            intervalMenu.add(item);
+            item.addActionListener(e -> {
+                int delay = (int)Math.round(interval);
+                uiTimer.setDelay(delay);
+                logManager.log("已设置进度条刷新间隔为: " + label);
+                SwingUtilities.invokeLater(() -> requestFocusInWindow());
+            });
+            if (interval == 50) item.setSelected(true); // 默认50ms
+        }
+        menuBar.add(intervalMenu);
+
+        // 导入歌曲按钮（右对齐）
+        menuBar.add(Box.createHorizontalGlue());
+        JButton importSongButton = new JButton("导入歌曲");
+        importSongButton.addActionListener(e -> {
+            importSong();
+            SwingUtilities.invokeLater(() -> requestFocusInWindow());
+        });
+        menuBar.add(importSongButton);
+
         setJMenuBar(menuBar); // 设置窗口的菜单栏
         
         // 创建NOTE类型标签和折叠按钮
@@ -2001,7 +2019,7 @@ public class MainWindow extends JFrame {
         totalTimeLabel.setText("/ " + beatCalculator.formatTime(total));
         double currentMeasures = beatCalculator.microsecondsToMeasures(displayTime);
         int currentMeasure = (int) Math.floor(currentMeasures);
-        int currentBeatInMeasure = (int) Math.floor((beatCalculator.microsecondsToBeats(displayTime)) % beatCalculator.getBeatsPerMeasure()) + 1;
+        int currentBeatInMeasure = (int) Math.floor((beatCalculator.microsecondsToBeats(displayTime)) % beatCalculator.getBeatsPerMeasure());
         measureBeatLabel.setText(String.format("小节: %d 拍: %d/%d", currentMeasure, currentBeatInMeasure, beatCalculator.getBeatsPerMeasure()));
     }
 }
