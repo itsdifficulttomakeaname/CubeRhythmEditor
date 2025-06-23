@@ -11,7 +11,8 @@ public enum NoteType {
     FLICK_LEFT("Flick←", Color.RED), // 红色
     FLICK_RIGHT("Flick→", new Color(128, 0, 128)), // 紫色
     DOUBLE("Double", new Color(255, 140, 0)), // 橙色
-    EXECUTION("Execution", Color.GRAY); // 灰色
+    EXECUTION("Execution", Color.GRAY), // 灰色
+    HOLD("Hold", new Color(0, 200, 0)); // 绿色
     
     private final String displayName;
     private final Color color;

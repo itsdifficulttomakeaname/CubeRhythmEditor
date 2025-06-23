@@ -18,6 +18,7 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.SwingUtilities; // 导入 SwingUtilities
 import org.project1.ui.NoteTypePanel;
+import java.util.List;
 
 /**
  * 主窗口类，设置GUI界面
@@ -157,6 +158,21 @@ public class MainWindow extends JFrame {
     // 添加一个成员变量，标记用户是否正在拖动进度条
     private boolean isUserDraggingSlider = false;
     
+    // 1. 新增显示拍数变量
+    private int displayBeatsCount = 8; // 默认显示8拍
+    
+    // 1. 成员变量补充
+    private NoteManager noteManager = new NoteManager(); // NOTE管理器，负责所有NOTE的存储与查询
+    
+    // 静态常量，避免频繁new对象
+    private static final BasicStroke NOTE_BORDER_STROKE = new BasicStroke(3f);
+    private static final BasicStroke NOTE_GLOW_STROKE = new BasicStroke(2f);
+    private static final Color NOTE_GLOW_COLOR = Color.GREEN;
+    private static final Color NOTE_BORDER_W = Color.WHITE;
+    private static final Color NOTE_BORDER_A = Color.YELLOW;
+    private static final Color NOTE_BORDER_S = Color.ORANGE;
+    private static final Color NOTE_BORDER_D = Color.RED;
+    
     /**
      * 构造函数，初始化窗口
      */
@@ -191,6 +207,9 @@ public class MainWindow extends JFrame {
         // 在initUI()结尾添加：
         uiTimer = new Timer(50, e -> updateMusicUIByClip());
         uiTimer.start();
+        // 删除测试NOTE，不再自动插入
+        // noteManager.addNote(new Note(3, 3, NoteType.TAP, beatCalculator.beatsToMicroseconds(0), "w", false));
+        // noteManager.addNote(new Note(-2, -2, NoteType.DRAG, beatCalculator.beatsToMicroseconds(1), "a", true));
     }
     
     /**
@@ -241,24 +260,49 @@ public class MainWindow extends JFrame {
         // 创建顶部菜单栏
         JMenuBar menuBar = new JMenuBar();
         
-        // "拍数"选项
-        beatsMenu = new JMenu("拍数");
-        ButtonGroup beatsButtonGroup = new ButtonGroup();
-        int[] beatOptions = {1, 2, 3, 4, 6, 8, 16, 24, 32};
-        for (int beats : beatOptions) {
+        // "拍数"折叠菜单
+        JMenu beatsParentMenu = new JMenu("拍数");
+        // 编辑拍数
+        JMenu editBeatsMenu = new JMenu("编辑拍数");
+        ButtonGroup editBeatsGroup = new ButtonGroup();
+        int[] editBeatOptions = {1, 2, 3, 4, 6, 8, 16, 24, 32};
+        for (int beats : editBeatOptions) {
             JRadioButtonMenuItem rbMenuItem = new JRadioButtonMenuItem(String.valueOf(beats));
-            beatsButtonGroup.add(rbMenuItem);
-            beatsMenu.add(rbMenuItem);
+            editBeatsGroup.add(rbMenuItem);
+            editBeatsMenu.add(rbMenuItem);
             rbMenuItem.addActionListener(e -> {
                 beatCalculator.setBeatsPerMeasure(beats);
-                logManager.log("切换拍数: " + beats);
-                SwingUtilities.invokeLater(() -> requestFocusInWindow());
+                logManager.log("切换编辑拍数: " + beats);
+                SwingUtilities.invokeLater(() -> {
+                    requestFocusInWindow();
+                    mainPanel.repaint();
+                });
             });
             if (beats == beatCalculator.getBeatsPerMeasure()) {
                 rbMenuItem.setSelected(true);
             }
         }
-        menuBar.add(beatsMenu);
+        // 显示拍数
+        JMenu displayBeatsMenu = new JMenu("显示拍数");
+        ButtonGroup displayBeatsGroup = new ButtonGroup();
+        int[] displayBeatOptions = {4, 8, 12, 16};
+        for (int beats : displayBeatOptions) {
+            JRadioButtonMenuItem rbMenuItem = new JRadioButtonMenuItem(String.valueOf(beats));
+            displayBeatsGroup.add(rbMenuItem);
+            displayBeatsMenu.add(rbMenuItem);
+            rbMenuItem.addActionListener(e -> {
+                displayBeatsCount = beats;
+                logManager.log("切换显示拍数: " + beats);
+                SwingUtilities.invokeLater(() -> {
+                    requestFocusInWindow();
+                    mainPanel.repaint();
+                });
+            });
+            if (beats == displayBeatsCount) rbMenuItem.setSelected(true);
+        }
+        beatsParentMenu.add(editBeatsMenu);
+        beatsParentMenu.add(displayBeatsMenu);
+        menuBar.add(beatsParentMenu);
 
         // "更新间隔"选项
         JMenu intervalMenu = new JMenu("更新间隔");
@@ -514,11 +558,74 @@ public class MainWindow extends JFrame {
         chartLogScrollPane = new JScrollPane(chartLogTextArea);
         chartLogScrollPane.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 325, 50, 275, GRID_PANEL_SIZE); // 调整高度与方框对齐
         chartLogScrollPane.setBorder(BorderFactory.createTitledBorder("铺面生成日志"));
+        // 在日志下方添加"重载"和"排序"按钮
+        JPanel chartLogButtonPanel = new JPanel();
+        chartLogButtonPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        chartLogButtonPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 325, 60 + GRID_PANEL_SIZE, 275, 40);
+        JButton reloadButton = new JButton("重载");
+        JButton sortButton = new JButton("排序");
+        chartLogButtonPanel.add(reloadButton);
+        chartLogButtonPanel.add(sortButton);
+        mainPanel.add(chartLogButtonPanel);
+        // "重载"按钮逻辑
+        reloadButton.addActionListener(e -> {
+            noteManager.clearNotes();
+            String[] lines = chartLogTextArea.getText().split("\\n");
+            for (String line : lines) {
+                Note parsed = parseNoteFromLog(line.trim());
+                if (parsed != null) noteManager.addNote(parsed);
+            }
+            mainPanel.repaint();
+        });
+        // "排序"按钮逻辑
+        sortButton.addActionListener(e -> {
+            List<Note> notes = noteManager.getNotes();
+            notes.sort((a, b) -> noteCompare(a, b));
+            noteManager.clearNotes();
+            for (Note n : notes) noteManager.addNote(n);
+            mainPanel.repaint();
+        });
         
-        // 将面板和控件添加到主面板
+        // 先初始化所有add到mainPanel的组件，防止NPE
+        if (noteTypePanel == null) {
+            noteTypePanel = new NoteTypePanel(currentNoteType, e -> {});
+            noteTypePanel.setBounds(0, 0, 250, 180);
+        }
+        if (noteTypeExpandedPanel == null) {
+            noteTypeExpandedPanel = new JPanel();
+            noteTypeExpandedPanel.setLayout(null);
+            noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, 180);
+            noteTypeExpandedPanel.add(noteTypePanel);
+            noteTypeExpandedPanel.setVisible(false);
+        }
+        if (songInfoPanel == null) {
+            songInfoPanel = new JPanel();
+            songInfoPanel.setLayout(null);
+        }
+        if (notePropertyPanel == null) {
+            notePropertyPanel = new JPanel();
+            notePropertyPanel.setLayout(null);
+        }
+        if (doubleNoteTipLabel == null) {
+            doubleNoteTipLabel = new JLabel("");
+        }
+        if (logTextArea == null) {
+            logTextArea = new JTextArea();
+        }
+        if (logScrollPane == null) {
+            logScrollPane = new JScrollPane(logTextArea);
+        }
+        if (chartLogTextArea == null) {
+            chartLogTextArea = new JTextArea();
+        }
+        if (chartLogScrollPane == null) {
+            chartLogScrollPane = new JScrollPane(chartLogTextArea);
+        }
+        // 先add编辑区和NOTE类型选择UI，保证显示
         mainPanel.add(gridPanel);
         mainPanel.add(noGridPanel);
         mainPanel.add(noteTypeHeaderPanel);
+        // 再add其它控件
         mainPanel.add(modeSwitchButton);
         mainPanel.add(xLabel);
         mainPanel.add(xCoordField);
@@ -534,8 +641,8 @@ public class MainWindow extends JFrame {
         mainPanel.add(logScrollPane);
         mainPanel.add(chartLogScrollPane);
         mainPanel.add(notePropertyPanel);
-        mainPanel.add(doubleNoteTipLabel); // Add the new label
-        mainPanel.add(noteTypePanel);
+        mainPanel.add(doubleNoteTipLabel);
+        mainPanel.add(noteTypeExpandedPanel);
 
         // 音乐进度条和时间显示
         timeSlider = new JSlider(0, 1000, 0);
@@ -683,7 +790,6 @@ public class MainWindow extends JFrame {
                     long targetMicroseconds = beatCalculator.beatsToMicroseconds(targetBeat);
                     musicPlayer.seek(targetMicroseconds);
                     updateMusicUIByClip();
-                    logManager.log("通过键盘导航到拍: " + String.format("%.2f", targetBeat));
                 } else if (e.getKeyCode() == KeyEvent.VK_RIGHT) {
                     // 下一拍
                     long current = musicPlayer.getCurrentTimeMicroseconds();
@@ -695,7 +801,6 @@ public class MainWindow extends JFrame {
                     long targetMicroseconds = beatCalculator.beatsToMicroseconds(targetBeat);
                     musicPlayer.seek(targetMicroseconds);
                     updateMusicUIByClip();
-                    logManager.log("通过键盘导航到拍: " + String.format("%.2f", targetBeat));
                 }
             }
         });
@@ -711,15 +816,33 @@ public class MainWindow extends JFrame {
             mainPanel.revalidate();
             mainPanel.repaint();
         });
-
-        // 创建NOTE类型展开面板
+        // NOTE类型选择面板
+        noteTypeButtonPanel = new NoteTypePanel(currentNoteType, e -> {
+            JRadioButton btn = (JRadioButton) e.getSource();
+            for (NoteType type : NoteType.values()) {
+                if (btn.getText().equals(type.getDisplayName())) {
+                    if (!isFirstDoublePlaced) {
+                        currentNoteType = type;
+                        noteTypeLabel.setText("当前NOTE类型: <" + currentNoteType.getDisplayName() + ">");
+                        logManager.log("切换NOTE类型: " + currentNoteType.getDisplayName());
+                        noGridPanel.repaint();
+                        updateCoordinateFieldStates();
+                    } else {
+                        logManager.log("请先完成Double音符的放置，才能切换Note类型！");
+                        noteTypeButtonPanel.setEnabled(false);
+                    }
+                    break;
+                }
+            }
+        });
+        noteTypeButtonPanel.setBounds(0, 0, 250, 180);
+        // NOTE类型折叠面板
         noteTypeExpandedPanel = new JPanel();
         noteTypeExpandedPanel.setLayout(null);
         noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, 180);
-        noteTypePanel.setBounds(0, 0, 250, 180);
-        noteTypeExpandedPanel.add(noteTypePanel);
-        noteTypeExpandedPanel.setVisible(false); // 初始收起
-
+        noteTypeExpandedPanel.add(noteTypeButtonPanel);
+        noteTypeExpandedPanel.setVisible(false);
+        // 添加到主面板
         mainPanel.add(noteTypeToggleButton);
         mainPanel.add(noteTypeExpandedPanel);
     }
@@ -840,51 +963,85 @@ public class MainWindow extends JFrame {
                     }
                 }
                 
-                // 只在鼠标跟随模式下绘制跟随鼠标的方格（直接使用鼠标位置）
+                // ---------- 伪3D NOTE动画显示 ----------
+                if (musicPlayer != null && beatCalculator != null && noteManager != null) {
+                    long currentTime = musicPlayer.getCurrentTimeMicroseconds();
+                    double currentBeat = beatCalculator.microsecondsToBeats(currentTime);
+                    java.util.List<Note> notesToShow = noteManager.getNotesForCurrentBeat(currentTime, displayBeatsCount, beatCalculator);
+                    centerX = getWidth() / 2;
+                    centerY = getHeight() / 2;
+                    int n = displayBeatsCount - 1;
+                    // 按拍数降序排序，保证后拍NOTE先绘制，前拍NOTE后绘制（在上层）
+                    notesToShow.sort((a, b) -> Double.compare(
+                        beatCalculator.microsecondsToBeats(b.getTimeMicroseconds()),
+                        beatCalculator.microsecondsToBeats(a.getTimeMicroseconds())
+                    ));
+                    for (Note note : notesToShow) {
+                        double noteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
+                        double k = noteBeat - currentBeat;
+                        if (k < 0 || k > n) continue;
+                        // 伪3D动画进度
+                        double progress = (n == 0) ? 1.0 : (n - k) / n;
+                        // 目标像素坐标
+                        double x = note.getX() * 100;
+                        double y = -note.getY() * 100;
+                        // 起点（内部方框投影）
+                        double x0 = x / 5.0;
+                        double y0 = y / 5.0;
+                        // 插值位置
+                        double cx = x0 + (x - x0) * progress;
+                        double cy = y0 + (y - y0) * progress;
+                        // 插值大小
+                        double size = 20 + (100 - 20) * progress;
+                        // 透明度插值
+                        int alpha = (int)(255 - (k / n) * (255 - 80));
+                        alpha = Math.max(0, Math.min(255, alpha));
+                        // 填充色为NOTE类型色
+                        Color fillColor = note.getColor();
+                        g.setColor(new Color(fillColor.getRed(), fillColor.getGreen(), fillColor.getBlue(), alpha));
+                        g.fillRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
+                        // 朝向边框
+                        Graphics2D g2 = (Graphics2D) g;
+                        Color borderColor = NOTE_BORDER_W;
+                        switch (note.getDirection() != null ? note.getDirection() : "w") {
+                            case "a": borderColor = NOTE_BORDER_A; break;
+                            case "s": borderColor = NOTE_BORDER_S; break;
+                            case "d": borderColor = NOTE_BORDER_D; break;
+                        }
+                        g2.setStroke(NOTE_BORDER_STROKE);
+                        g2.setColor(borderColor);
+                        g2.drawRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
+                        // 发光
+                        if (note.isGlowing()) {
+                            g2.setColor(NOTE_GLOW_COLOR);
+                            g2.setStroke(NOTE_GLOW_STROKE);
+                            int px = (int)(centerX + cx);
+                            int py = (int)(centerY + cy);
+                            g2.drawLine(px-2, py, px+2, py);
+                            g2.drawLine(px, py-2, px, py+2);
+                        }
+                    }
+                }
+                // 仅在无网格模式下显示跟随鼠标的NOTE，不吸附
                 if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION && 
                     currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT) {
-                    // 获取当前NOTE类型的颜色，并设置半透明
                     Color noteColor = currentNoteType.getColor();
                     Color transparentColor = new Color(
                             noteColor.getRed(), 
                             noteColor.getGreen(), 
                             noteColor.getBlue(), 
                             180); // 透明度
-                    
                     g.setColor(transparentColor);
-                    // 绘制NOTE方块：直接使用鼠标位置
                     int squareX = mousePosition.x - FOLLOW_SQUARE_SIZE / 2;
                     int squareY = mousePosition.y - FOLLOW_SQUARE_SIZE / 2;
                     g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                    
-                    // 绘制边框
-                    g.setColor(currentNoteType.getColor());
-                    g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                }
-                
-                // 绘制手动输入的点（直接使用输入位置）
-                if (!isMouseFollowMode && manualInputPoint != null && currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT) {
-                    Color noteColor = currentNoteType.getColor();
-                    Color transparentColor = new Color(
-                            noteColor.getRed(), 
-                            noteColor.getGreen(), 
-                            noteColor.getBlue(), 
-                            180);
-                    
-                    g.setColor(transparentColor);
-                    // 绘制NOTE方块：直接使用手动输入点
-                    int squareX = manualInputPoint.x - FOLLOW_SQUARE_SIZE / 2;
-                    int squareY = manualInputPoint.y - FOLLOW_SQUARE_SIZE / 2;
-                    g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                    
                     g.setColor(currentNoteType.getColor());
                     g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
                 }
             }
         };
         panel.setLayout(null);
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(new Color(224, 224, 224)); // 浅灰色，保证白色边框可见
         
         // 添加鼠标移动监听器
         panel.addMouseMotionListener(new MouseMotionAdapter() {
@@ -1047,10 +1204,13 @@ public class MainWindow extends JFrame {
                         String x_formatted = formatCoordinateDisplay(finalGridX);
                         String y_formatted = formatCoordinateDisplay(finalGridY);
                         // 输出铺面生成日志
-                        chartLogTextArea.append(String.format("%s: (%s, \"%s\", %s, %s, %s, %s)\n",
+                        chartLogTextArea.append(String.format("%s(%s, \"%s\", %s, %s, %s)\n",
                             currentNoteType.name().toLowerCase(),
                             beatCalculator.formatTimeToSecondsWithDecimal(musicPlayer.getCurrentTimeMicroseconds()),
                             direction, x_formatted, y_formatted, isGlowing ? "true" : "false"));
+                        // 真正添加NOTE
+                        noteManager.addNote(new Note(finalGridX, finalGridY, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        panel.repaint();
                     } else {
                         // 无网格模式下，直接用鼠标真实坐标
                         int centerX = panel.getWidth() / 2;
@@ -1071,6 +1231,9 @@ public class MainWindow extends JFrame {
                             currentNoteType.name().toLowerCase(),
                             beatCalculator.formatTimeToSecondsWithDecimal(musicPlayer.getCurrentTimeMicroseconds()),
                             direction, x_formatted, y_formatted, isGlowing ? "true" : "false"));
+                        // 真正添加NOTE
+                        noteManager.addNote(new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        panel.repaint();
                     }
                 }
                 SwingUtilities.invokeLater(() -> requestFocusInWindow()); 
@@ -1650,10 +1813,90 @@ public class MainWindow extends JFrame {
                     g.setColor(currentNoteType.getColor());
                     g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
                 }
+                
+                // ---------- 伪3D NOTE动画显示 ----------
+                if (musicPlayer != null && beatCalculator != null && noteManager != null) {
+                    long currentTime = musicPlayer.getCurrentTimeMicroseconds();
+                    double currentBeat = beatCalculator.microsecondsToBeats(currentTime);
+                    java.util.List<Note> notesToShow = noteManager.getNotesForCurrentBeat(currentTime, displayBeatsCount, beatCalculator);
+                    centerX = getWidth() / 2;
+                    centerY = getHeight() / 2;
+                    int n = displayBeatsCount - 1;
+                    // 按拍数降序排序，保证后拍NOTE先绘制，前拍NOTE后绘制（在上层）
+                    notesToShow.sort((a, b) -> Double.compare(
+                        beatCalculator.microsecondsToBeats(b.getTimeMicroseconds()),
+                        beatCalculator.microsecondsToBeats(a.getTimeMicroseconds())
+                    ));
+                    for (Note note : notesToShow) {
+                        double noteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
+                        double k = noteBeat - currentBeat;
+                        if (k < 0 || k > n) continue;
+                        // 伪3D动画进度
+                        double progress = (n == 0) ? 1.0 : (n - k) / n;
+                        // 目标像素坐标
+                        double x = note.getX() * 100;
+                        double y = -note.getY() * 100;
+                        // 起点（内部方框投影）
+                        double x0 = x / 5.0;
+                        double y0 = y / 5.0;
+                        // 插值位置
+                        double cx = x0 + (x - x0) * progress;
+                        double cy = y0 + (y - y0) * progress;
+                        // 插值大小
+                        double size = 20 + (100 - 20) * progress;
+                        // 透明度插值
+                        int alpha = (int)(255 - (k / n) * (255 - 80));
+                        alpha = Math.max(0, Math.min(255, alpha));
+                        // 填充色为NOTE类型色
+                        Color fillColor = note.getColor();
+                        g.setColor(new Color(fillColor.getRed(), fillColor.getGreen(), fillColor.getBlue(), alpha));
+                        g.fillRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
+                        // 朝向边框
+                        Graphics2D g2 = (Graphics2D) g;
+                        Color borderColor = NOTE_BORDER_W;
+                        switch (note.getDirection() != null ? note.getDirection() : "w") {
+                            case "a": borderColor = NOTE_BORDER_A; break;
+                            case "s": borderColor = NOTE_BORDER_S; break;
+                            case "d": borderColor = NOTE_BORDER_D; break;
+                        }
+                        g2.setStroke(NOTE_BORDER_STROKE);
+                        g2.setColor(borderColor);
+                        g2.drawRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
+                        // 发光
+                        if (note.isGlowing()) {
+                            g2.setColor(NOTE_GLOW_COLOR);
+                            g2.setStroke(NOTE_GLOW_STROKE);
+                            int px = (int)(centerX + cx);
+                            int py = (int)(centerY + cy);
+                            g2.drawLine(px-2, py, px+2, py);
+                            g2.drawLine(px, py-2, px, py+2);
+                        }
+                    }
+                }
+                // 仅在网格模式下显示吸附后的NOTE，不显示跟随鼠标的NOTE
+                if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION && 
+                    currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT) {
+                    // 获取当前NOTE类型的颜色，并设置半透明
+                    Color noteColor = currentNoteType.getColor();
+                    Color transparentColor = new Color(
+                            noteColor.getRed(), 
+                            noteColor.getGreen(), 
+                            noteColor.getBlue(), 
+                            180); // 透明度
+                    g.setColor(transparentColor);
+                    // 只吸附到最近的网格点
+                    Point nearestPoint = findNearestGridPoint(mousePosition.x, mousePosition.y);
+                    int squareX = nearestPoint.x - FOLLOW_SQUARE_SIZE / 2;
+                    int squareY = nearestPoint.y - FOLLOW_SQUARE_SIZE / 2;
+                    g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                    // 绘制边框
+                    g.setColor(currentNoteType.getColor());
+                    g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                }
             }
         };
         panel.setLayout(null);
-        panel.setBackground(Color.WHITE);
+        panel.setBackground(new Color(224, 224, 224)); // 浅灰色，保证白色边框可见
         
         // 添加鼠标移动监听器
         panel.addMouseMotionListener(new MouseMotionAdapter() {
@@ -1804,6 +2047,9 @@ public class MainWindow extends JFrame {
                             currentNoteType.name().toLowerCase(),
                             beatCalculator.formatTimeToSecondsWithDecimal(musicPlayer.getCurrentTimeMicroseconds()),
                             direction, x_formatted, y_formatted, isGlowing ? "true" : "false"));
+                        // 真正添加NOTE
+                        noteManager.addNote(new Note(finalGridX, finalGridY, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        panel.repaint();
                     } else {
                         // 无网格模式下，直接用鼠标真实坐标
                         int centerX = panel.getWidth() / 2;
@@ -1824,6 +2070,9 @@ public class MainWindow extends JFrame {
                             currentNoteType.name().toLowerCase(),
                             beatCalculator.formatTimeToSecondsWithDecimal(musicPlayer.getCurrentTimeMicroseconds()),
                             direction, x_formatted, y_formatted, isGlowing ? "true" : "false"));
+                        // 真正添加NOTE
+                        noteManager.addNote(new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        panel.repaint();
                     }
                 }
                 SwingUtilities.invokeLater(() -> requestFocusInWindow()); 
@@ -2017,9 +2266,85 @@ public class MainWindow extends JFrame {
         }
         currentTimeLabel.setText(beatCalculator.formatTime(displayTime));
         totalTimeLabel.setText("/ " + beatCalculator.formatTime(total));
-        double currentMeasures = beatCalculator.microsecondsToMeasures(displayTime);
-        int currentMeasure = (int) Math.floor(currentMeasures);
-        int currentBeatInMeasure = (int) Math.floor((beatCalculator.microsecondsToBeats(displayTime)) % beatCalculator.getBeatsPerMeasure());
-        measureBeatLabel.setText(String.format("小节: %d 拍: %d/%d", currentMeasure, currentBeatInMeasure, beatCalculator.getBeatsPerMeasure()));
+        double totalBeats = beatCalculator.microsecondsToBeats(displayTime) + 1e-6;
+        int beatsPerMeasure = beatCalculator.getBeatsPerMeasure();
+        int currentMeasure = (int)(totalBeats / beatsPerMeasure);
+        int currentBeatInMeasure;
+        if (totalBeats < 1e-4) {
+            currentBeatInMeasure = 0;
+        } else {
+            currentBeatInMeasure = (int)(totalBeats % beatsPerMeasure) + 1;
+        }
+        measureBeatLabel.setText(String.format("小节: %d 拍: %d/%d", currentMeasure, currentBeatInMeasure, beatsPerMeasure));
+        mainPanel.repaint();
+    }
+
+    /**
+     * 解析日志行生成NOTE对象，支持tap/drag/double等格式
+     */
+    private Note parseNoteFromLog(String line) {
+        try {
+            if (line.startsWith("tap(") || line.startsWith("drag(") || line.startsWith("hold(")) {
+                // tap/drag/hold(时间, "方向", x, y, 发光)
+                int l = line.indexOf('('), r = line.lastIndexOf(')');
+                String[] arr = line.substring(l+1, r).split(",");
+                double time = Double.parseDouble(arr[0].trim());
+                String dir = arr[1].replaceAll("[\" ]", "");
+                double x = Double.parseDouble(arr[2].trim());
+                double y = Double.parseDouble(arr[3].trim());
+                boolean glow = arr[4].trim().equalsIgnoreCase("true");
+                NoteType type;
+                if (line.startsWith("tap(")) type = NoteType.TAP;
+                else if (line.startsWith("drag(")) type = NoteType.DRAG;
+                else type = NoteType.HOLD;
+                return new Note(x, y, type, (long)(time * 1_000_000), dir, glow);
+            } else if (line.startsWith("double(")) {
+                // double(时间, "方向", x1, y1, x2, y2, 发光)
+                int l = line.indexOf('('), r = line.lastIndexOf(')');
+                String[] arr = line.substring(l+1, r).split(",");
+                double time = Double.parseDouble(arr[0].trim());
+                String dir = arr[1].replaceAll("[\" ]", "");
+                double x1 = Double.parseDouble(arr[2].trim());
+                double y1 = Double.parseDouble(arr[3].trim());
+                double x2 = Double.parseDouble(arr[4].trim());
+                double y2 = Double.parseDouble(arr[5].trim());
+                boolean glow = arr[6].trim().equalsIgnoreCase("true");
+                return new Note(x1, y1, x2, y2, NoteType.DOUBLE, (long)(time * 1_000_000), dir, glow);
+            } else if (line.startsWith("flick(")) {
+                // flick(时间, "方向", "left/right", 发光)
+                int l = line.indexOf('('), r = line.lastIndexOf(')');
+                String[] arr = line.substring(l+1, r).split(",");
+                double time = Double.parseDouble(arr[0].trim());
+                String dir = arr[1].replaceAll("[\" ]", "");
+                String flickDir = arr[2].replaceAll("[\" ]", "");
+                boolean glow = arr[3].trim().equalsIgnoreCase("true");
+                NoteType type = flickDir.equalsIgnoreCase("left") ? NoteType.FLICK_LEFT : NoteType.FLICK_RIGHT;
+                return new Note(type, (long)(time * 1_000_000), dir, flickDir, glow);
+            } else if (line.startsWith("execution(")) {
+                // execution(时间)
+                int l = line.indexOf('('), r = line.lastIndexOf(')');
+                String[] arr = line.substring(l+1, r).split(",");
+                double time = Double.parseDouble(arr[0].trim());
+                return new Note(NoteType.EXECUTION, (long)(time * 1_000_000));
+            }
+        } catch (Exception ex) { return null; }
+        return null;
+    }
+    /**
+     * NOTE排序规则：时间升序，坐标小的优先，发光false在前
+     */
+    private int noteCompare(Note a, Note b) {
+        int t = Long.compare(a.getTimeMicroseconds(), b.getTimeMicroseconds());
+        if (t != 0) return t;
+        boolean aHasCoord = a.hasCoordinates(), bHasCoord = b.hasCoordinates();
+        if (aHasCoord && bHasCoord) {
+            int x = Double.compare(a.getX(), b.getX());
+            if (x != 0) return x;
+            int y = Double.compare(a.getY(), b.getY());
+            if (y != 0) return y;
+        }
+        if (aHasCoord != bHasCoord) return aHasCoord ? -1 : 1;
+        if (a.isGlowing() != b.isGlowing()) return a.isGlowing() ? 1 : -1;
+        return 0;
     }
 }
