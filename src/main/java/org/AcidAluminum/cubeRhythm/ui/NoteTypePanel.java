@@ -1,7 +1,7 @@
-package org.project1.ui;
+package org.AcidAluminum.cubeRhythm.ui;
 
 import javax.swing.*;
-import org.project1.NoteType;
+import org.AcidAluminum.cubeRhythm.NoteType;
 import java.awt.*;
 import java.awt.event.ActionListener;
 

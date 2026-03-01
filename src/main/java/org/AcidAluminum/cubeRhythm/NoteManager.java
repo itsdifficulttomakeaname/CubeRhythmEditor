@@ -1,4 +1,4 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -58,9 +58,17 @@ public class NoteManager {
         double currentBeat = beatCalculator.microsecondsToBeats(currentTime);
         double minBeat = currentBeat;
         double maxBeat = currentBeat + (beatsToShow - 1);
+
         // 计算对应的时间区间
         long minTime = beatCalculator.beatsToMicroseconds(minBeat);
         long maxTime = beatCalculator.beatsToMicroseconds(maxBeat);
+
+        // 添加时间容差（0.1拍的时间，约等于50-100ms，取决于BPM）
+        // 这样可以容忍音符时间和拍数之间的精度误差
+        long tolerance = beatCalculator.beatsToMicroseconds(0.1);
+        minTime = Math.max(0, minTime - tolerance);
+        maxTime = maxTime + tolerance;
+
         // TreeMap子区间查找
         for (List<Note> group : notesByTime.subMap(minTime, true, maxTime, true).values()) {
             result.addAll(group);

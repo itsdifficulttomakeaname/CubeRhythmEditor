@@ -1,7 +1,10 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
+
+import lombok.Getter;
 
 import java.text.DecimalFormat;
 
+@Getter
 public class BeatCalculator {
 
     private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("0.00");
@@ -25,18 +28,10 @@ public class BeatCalculator {
         }
     }
 
-    public double getBpm() {
-        return bpm;
-    }
-
     public void setBeatsPerMeasure(int beatsPerMeasure) {
         if (beatsPerMeasure > 0) {
             this.beatsPerMeasure = beatsPerMeasure;
         }
-    }
-
-    public int getBeatsPerMeasure() {
-        return beatsPerMeasure;
     }
 
     /**

@@ -1,4 +1,4 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
 
 import javax.swing.JTextArea;
 import java.text.SimpleDateFormat;

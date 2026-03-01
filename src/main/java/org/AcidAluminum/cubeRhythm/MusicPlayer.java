@@ -1,9 +1,8 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
 
 import javax.sound.sampled.*;
 import java.io.File;
 import java.io.IOException;
-import java.net.URL;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,19 +28,21 @@ public class MusicPlayer {
     public void loadSong(String filePath) throws UnsupportedAudioFileException, IOException, LineUnavailableException {
         // 清理现有资源
         close();
-        
+
         File audioFile = new File(filePath);
-        if (!filePath.toLowerCase().endsWith(".ogg")) {
-            throw new UnsupportedAudioFileException("仅支持OGG格式音频文件");
+
+        try {
+            audioInputStream = AudioSystem.getAudioInputStream(audioFile);
+        } catch (UnsupportedAudioFileException e) {
+            // 提供更详细的错误信息
+            throw new UnsupportedAudioFileException(
+                "无法识别音频文件格式: " + audioFile.getName() +
+                ". 请确保文件是有效的OGG格式。原始错误: " + e.getMessage()
+            );
         }
-        
-        audioInputStream = AudioSystem.getAudioInputStream(audioFile);
+
         AudioFormat format = audioInputStream.getFormat();
-        
-        // 计算音频时长
-        long frameLength = audioInputStream.getFrameLength();
-        microsecondLength = (long)(frameLength * 1_000_000 / format.getFrameRate());
-        
+
         // 设置解码格式
         AudioFormat decodedFormat = new AudioFormat(
             AudioFormat.Encoding.PCM_SIGNED,
@@ -52,21 +53,18 @@ public class MusicPlayer {
             format.getSampleRate(),
             false
         );
-        
+
         AudioInputStream decodedStream = AudioSystem.getAudioInputStream(decodedFormat, audioInputStream);
-        
-        // 设置大缓冲区（1MB）
-        int bufferSize = 1024 * 1024; // 1MB
-        decodedStream = new AudioInputStream(decodedStream, decodedFormat, decodedStream.getFrameLength());
+
         DataLine.Info info = new DataLine.Info(Clip.class, decodedFormat);
         clip = (Clip) AudioSystem.getLine(info);
         clip.open(decodedStream);
-        
-        // 修正：用clip的实际时长
+
+        // 从Clip获取音频时长（对于OGG等压缩格式，这是获取准确时长的唯一方法）
         microsecondLength = clip.getMicrosecondLength();
-        
+
         // 设置歌曲信息
-        this.songName = audioFile.getName().replace(".ogg", "");
+        this.songName = audioFile.getName().replaceAll("\\.[^.]+$", ""); // 移除任何扩展名
         this.songAuthor = "未知作者";
         this.frameRate = format.getFrameRate();
     }
@@ -138,13 +136,5 @@ public class MusicPlayer {
                 LOGGER.log(Level.SEVERE, "Error closing audio input stream", e);
             }
         }
-    }
-
-    public long getTotalMicroseconds() {
-        return microsecondLength;
-    }
-
-    public boolean isInitialized() {
-        return clip != null;
     }
 }

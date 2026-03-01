@@ -1,10 +1,13 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
+
+import lombok.Getter;
 
 import java.awt.Color;
 
 /**
  * NOTE类型枚举
  */
+@Getter
 public enum NoteType {
     TAP("Tap", new Color(0, 120, 215)), // 蓝色
     DRAG("Drag", new Color(255, 215, 0)), // 黄色
@@ -21,15 +24,7 @@ public enum NoteType {
         this.displayName = displayName;
         this.color = color;
     }
-    
-    public String getDisplayName() {
-        return displayName;
-    }
-    
-    public Color getColor() {
-        return color;
-    }
-    
+
     @Override
     public String toString() {
         return displayName;

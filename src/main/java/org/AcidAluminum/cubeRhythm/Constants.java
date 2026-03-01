@@ -1,4 +1,4 @@
-package org.project1;
+package org.AcidAluminum.cubeRhythm;
 
 public class Constants {
     public static final int GRID_SIZE = 7;
