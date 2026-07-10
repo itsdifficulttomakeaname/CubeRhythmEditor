@@ -4,26 +4,25 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.awt.Color;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * NOTE类，存储NOTE的所有信息
- * 说明：NOTE的生成、伪3D动画、属性设置等核心逻辑已在主窗口MainWindow中实现。
- * 本类仅作为数据结构，负责存储和提供NOTE属性。
- */
 @Setter
 @Getter
 public class Note {
-    private double x; // 目标X坐标（网格坐标）
-    private double y; // 目标Y坐标（网格坐标）
-    private double x2; // Double音符的第二个X坐标
-    private double y2; // Double音符的第二个Y坐标
-    private NoteType type; // NOTE类型
-    private long timeMicroseconds; // 时间（微秒）
-    private String direction; // 朝向
-    private boolean isGlowing; // 是否发光
-    private String flickDirection; // Flick方向（仅用于Flick类型）
+    private double x;
+    private double y;
+    private double x2;
+    private double y2;
+    private NoteType type;
+    private long timeMicroseconds;
+    private String direction;
+    private boolean isGlowing;
+    private String flickDirection;
+    private List<String> tags = new ArrayList<>();
+    private com.google.gson.JsonArray actions;
+    private com.google.gson.JsonObject events;
 
-    // 构造函数（单点）
     public Note(double x, double y, NoteType type, long timeMicroseconds, String direction, boolean isGlowing) {
         this.x = x;
         this.y = y;
@@ -33,7 +32,6 @@ public class Note {
         this.isGlowing = isGlowing;
     }
 
-    // Double音符构造函数
     public Note(double x1, double y1, double x2, double y2, NoteType type, long timeMicroseconds, String direction, boolean isGlowing) {
         this.x = x1;
         this.y = y1;
@@ -45,7 +43,6 @@ public class Note {
         this.isGlowing = isGlowing;
     }
 
-    // Flick音符构造函数
     public Note(NoteType type, long timeMicroseconds, String direction, String flickDirection, boolean isGlowing) {
         this.type = type;
         this.timeMicroseconds = timeMicroseconds;
@@ -54,38 +51,64 @@ public class Note {
         this.isGlowing = isGlowing;
     }
 
-    // Execution音符构造函数
     public Note(NoteType type, long timeMicroseconds) {
         this.type = type;
         this.timeMicroseconds = timeMicroseconds;
     }
 
-    // 是否有坐标（非Execution/Flick）
+    public void setTag(String tag) {
+        this.tags.clear();
+        if (tag != null && !tag.isEmpty()) {
+            for (String t : tag.split(",")) {
+                String trimmed = t.trim();
+                if (!trimmed.isEmpty()) {
+                    this.tags.add(trimmed);
+                }
+            }
+        }
+    }
+
+    public String getTag() {
+        return tags.isEmpty() ? "" : String.join(", ", tags);
+    }
+
     public boolean hasCoordinates() {
-        return type != NoteType.EXECUTION && type != NoteType.FLICK_LEFT && type != NoteType.FLICK_RIGHT;
+        return type != NoteType.EXECUTION && type != NoteType.FLICK_LEFT &&
+               type != NoteType.FLICK_RIGHT && type != NoteType.FAKE_FLICK;
     }
-    // 是否为Double音符
+
     public boolean isDouble() {
-        return type == NoteType.DOUBLE;
+        return type == NoteType.DOUBLE || type == NoteType.FAKE_DOUBLE ||
+               type == NoteType.MINE_DOUBLE;
     }
-    // 是否为Execution音符
+
     public boolean isExecution() {
         return type == NoteType.EXECUTION;
     }
-    // 是否为Flick音符
+
     public boolean isFlick() {
-        return type == NoteType.FLICK_LEFT || type == NoteType.FLICK_RIGHT;
+        return type == NoteType.FLICK_LEFT || type == NoteType.FLICK_RIGHT || type == NoteType.FAKE_FLICK;
     }
-    // 获取NOTE颜色（可根据类型自定义）
+
+    public boolean isFake() {
+        return type == NoteType.FAKE_TAP || type == NoteType.FAKE_HOLD ||
+               type == NoteType.FAKE_DRAG || type == NoteType.FAKE_FLICK ||
+               type == NoteType.FAKE_DOUBLE;
+    }
+
+    public boolean isMine() {
+        return type == NoteType.MINE_TAP || type == NoteType.MINE_DRAG ||
+               type == NoteType.MINE_DOUBLE;
+    }
+
     public Color getColor() {
         return switch (type) {
-            case TAP -> new Color(0, 153, 255);
-            case DRAG -> new Color(255, 215, 0);
-            case DOUBLE -> new Color(255, 0, 153);
+            case TAP, FAKE_TAP, MINE_TAP -> new Color(0, 120, 215);
+            case DRAG, FAKE_DRAG, MINE_DRAG -> new Color(255, 215, 0);
+            case DOUBLE, FAKE_DOUBLE, MINE_DOUBLE -> new Color(255, 140, 0);
             case EXECUTION -> new Color(128, 128, 128);
-            case FLICK_LEFT -> new Color(102, 0, 204);
-            case FLICK_RIGHT -> new Color(204, 0, 0);
-            default -> Color.GRAY;
+            case FLICK_LEFT, FLICK_RIGHT, FAKE_FLICK -> new Color(255, 0, 153);
+            case HOLD, FAKE_HOLD -> new Color(0, 200, 0);
         };
     }
-} 
+}

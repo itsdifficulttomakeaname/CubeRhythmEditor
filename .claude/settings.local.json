@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "mcp__ide__getDiagnostics",
-      "Bash(mvn compile:*)"
+      "Bash(mvn compile:*)",
+      "Bash(mvn clean *)",
+      "Read(//mnt/c/Users/zxy/IdeaProjects/**)",
+      "Bash(cmd.exe /c \"mvn clean compile\")",
+      "Bash(\"C:/Users/zxy/AppData/Roaming/JetBrains/IdeaIC2025.2/plugins/maven/lib/maven3/bin/mvn.cmd\" -f \"C:/Users/zxy/IdeaProjects/CubeRhythmEditor/pom.xml\" clean compile -q)",
+      "Bash(mvn.cmd clean *)",
+      "Bash(\"C:\\\\Users\\\\zxy\\\\AppData\\\\Roaming\\\\JetBrains\\\\IdeaIC2025.2\\\\plugins\\\\maven\\\\lib\\\\maven3\\\\bin\\\\mvn.cmd\" -f \"C:\\\\Users\\\\zxy\\\\IdeaProjects\\\\CubeRhythmEditor\\\\pom.xml\" clean compile -q)",
+      "Bash(cmd /c \"cd /d C:\\\\Users\\\\zxy\\\\IdeaProjects\\\\CubeRhythmEditor && mvn clean compile 2>&1\")",
+      "Bash(cmd /c \"C:\\\\Users\\\\zxy\\\\IdeaProjects\\\\CubeRhythmEditor\\\\mvnw.cmd clean compile 2>&1\")",
+      "Bash(grep -v \"//\\\\|label\\\\|Label\")"
     ]
   }
 }

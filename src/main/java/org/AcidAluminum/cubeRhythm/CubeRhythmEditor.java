@@ -9,4 +9,4 @@ public class CubeRhythmEditor {
         MainWindow window = new MainWindow();
         window.setVisible(true);
     }
-} 
+}

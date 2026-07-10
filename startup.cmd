@@ -1,0 +1,1 @@
+java "-Dsun.java2d.d3d=true" "-Dsun.java2d.d3d.texture=true" "-Dswing.aatext=true" "-Dswing.defaultlaf=com.sun.java.swing.plaf.windows.WindowsLookAndFeel" -Xms256m -Xmx4g -XX:+UseZGC -XX:+UseStringDeduplication -XX:+DisableExplicitGC -jar .\target\CubeRhythmEditor-1.0.0-SNAPSHOT.jar

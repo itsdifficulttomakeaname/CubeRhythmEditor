@@ -69,8 +69,8 @@ public class NoteManager {
         minTime = Math.max(0, minTime - tolerance);
         maxTime = maxTime + tolerance;
 
-        // TreeMap子区间查找
-        for (List<Note> group : notesByTime.subMap(minTime, true, maxTime, true).values()) {
+        // TreeMap子区间查找，降序（后拍先入列表，绘制时先绘后拍，前拍在上层）
+        for (List<Note> group : notesByTime.subMap(minTime, true, maxTime, true).descendingMap().values()) {
             result.addAll(group);
         }
         return result;

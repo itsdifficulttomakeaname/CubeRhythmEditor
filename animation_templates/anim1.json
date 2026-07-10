@@ -1,0 +1,16 @@
+{
+  "_type": "groupEvents",
+  "content": {
+    "selector": {
+      "face": "w"
+    },
+    "events": {
+      "x": [
+        {}
+      ],
+      "y": [
+        {}
+      ]
+    }
+  }
+}

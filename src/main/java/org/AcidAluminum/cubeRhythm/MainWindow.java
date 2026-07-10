@@ -17,6 +17,7 @@ import javax.swing.SwingUtilities;
 import lombok.Getter;
 import lombok.Setter;
 import org.AcidAluminum.cubeRhythm.ui.NoteTypePanel;
+import org.AcidAluminum.cubeRhythm.ui.JsonEditorPanel;
 import java.util.List;
 
 /**
@@ -84,6 +85,8 @@ public class MainWindow extends JFrame {
     private JTextField composerField;
     private JTextField chartAuthorField;
     private JTextField difficultyField;
+    private JTextField difficultyLevelField;
+    private JComboBox<String> difficultyColorCombo;
     private JTextField durationField;
     private JTextField offsetField;
     // 添加新的成员变量
@@ -98,12 +101,15 @@ public class MainWindow extends JFrame {
     private JRadioButton directionS;
     private JRadioButton directionD;
     private JCheckBox glowCheckBox;
+    private JTextField tagField;
     private boolean isFirstDoublePlaced = false;
     private Point firstDoublePoint = null;
     private JTextField x2CoordField;
     private JTextField y2CoordField;
     private JLabel x2Label;
     private JLabel y2Label;
+    private JLabel xLabel;
+    private JLabel yLabel;
     
     // 新增Double Note提示标签
     private JLabel doubleNoteTipLabel;
@@ -125,7 +131,11 @@ public class MainWindow extends JFrame {
     private JToggleButton noteTypeToggleButton;
     private JPanel noteTypeExpandedPanel;
 
-    private JTextArea chartLogTextArea;
+    private JsonEditorPanel chartEditorPanel;
+    private JPanel chartEditorContainer;
+    private JScrollPane logScrollPane;
+    private JPanel chartLogButtonPanel;
+    private int jsonEditorWidth = 275; // 可调宽度
 
     private JLabel positionLabel;
 
@@ -149,6 +159,8 @@ public class MainWindow extends JFrame {
 
     // 添加一个成员变量，标记用户是否正在拖动进度条
     private boolean isUserDraggingSlider = false;
+    // 右键菜单打开时屏蔽左键放置，防误触
+    private boolean isContextMenuOpen = false;
 
     private int displayBeatsCount = 8; // 默认显示8拍
 
@@ -162,6 +174,10 @@ public class MainWindow extends JFrame {
     private static final Color NOTE_BORDER_A = Color.YELLOW;
     private static final Color NOTE_BORDER_S = Color.ORANGE;
     private static final Color NOTE_BORDER_D = Color.RED;
+
+    private static final java.util.Set<String> DIRECT_NOTE_ACTIONS = java.util.Set.of("hide_note", "change_glow_color", "easing_motion");
+    private static final java.util.Set<String> INDIRECT_NOTE_ACTIONS = java.util.Set.of("draw_line", "draw_text");
+    private static final java.util.Set<String> PLAYER_ACTIONS = java.util.Set.of("title", "actionbar", "chat", "potion", "remove_potion", "clear_effects", "blind");
     
     /**
      * 构造函数，初始化窗口
@@ -238,10 +254,26 @@ public class MainWindow extends JFrame {
         mainPanel.setBackground(new Color(240, 240, 240));
         mainPanel.setFocusable(true); // 使主面板可以获取焦点
 
+        // 点击主面板空白区域时将焦点拉回，使键盘快捷键（如Shift切换网格）生效
+        mainPanel.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                mainPanel.requestFocusInWindow();
+            }
+        });
+
         // 添加键盘监听器处理箭头键
         mainPanel.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_SHIFT) {
+                    toggleGridDisplay();
+                    return;
+                } else if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                    System.exit(0);
+                    return;
+                }
+
                 if (musicPlayer == null || beatCalculator == null) return;
 
                 long currentTime = musicPlayer.getCurrentTimeMicroseconds();
@@ -389,35 +421,11 @@ public class MainWindow extends JFrame {
                 if (result == javax.swing.JFileChooser.APPROVE_OPTION) {
                     java.io.File file = fileChooser.getSelectedFile();
 
-                    // 读取JSON文件内容
-                    String jsonContent = java.nio.file.Files.readString(file.toPath(), java.nio.charset.StandardCharsets.UTF_8);
-
-                    // 使用Gson解析，判断是完整格式还是notes数组格式
-                    com.google.gson.Gson gson = new com.google.gson.Gson();
-                    com.google.gson.JsonElement jsonElement = gson.fromJson(jsonContent, com.google.gson.JsonElement.class);
-
-                    String notesJsonContent;
-                    if (jsonElement.isJsonObject()) {
-                        // 完整格式：包含metadata和notes
-                        com.google.gson.JsonObject jsonObject = jsonElement.getAsJsonObject();
-                        if (jsonObject.has("notes")) {
-                            com.google.gson.JsonArray notesArray = jsonObject.getAsJsonArray("notes");
-                            // 格式化输出notes数组
-                            com.google.gson.GsonBuilder gsonBuilder = new com.google.gson.GsonBuilder();
-                            gsonBuilder.setPrettyPrinting();
-                            notesJsonContent = gsonBuilder.create().toJson(notesArray);
-                        } else {
-                            throw new Exception("JSON文件中没有找到notes数组");
-                        }
-                    } else if (jsonElement.isJsonArray()) {
-                        // notes数组格式：直接使用
-                        notesJsonContent = jsonContent;
-                    } else {
-                        throw new Exception("不支持的JSON格式");
-                    }
+                    // 读取JSON文件完整内容，不做任何截断
+                    String notesJsonContent = java.nio.file.Files.readString(file.toPath(), java.nio.charset.StandardCharsets.UTF_8);
 
                     // 处理日志区合并/覆盖
-                    String oldLog = chartLogTextArea.getText();
+                    String oldLog = chartEditorPanel.getText();
                     if (!oldLog.trim().isEmpty()) {
                         int choice = javax.swing.JOptionPane.showOptionDialog(this,
                             "对铺面生成日志中已存在的铺面片段做如何处理？",
@@ -428,10 +436,11 @@ public class MainWindow extends JFrame {
                             new Object[]{"覆盖", "合并", "取消"},
                             "覆盖");
                         if (choice == 0) { // 覆盖
-                            chartLogTextArea.setText(notesJsonContent);
+                            chartEditorPanel.setText(notesJsonContent);
                         } else if (choice == 1) { // 合并
                             // 合并JSON数组
                             try {
+                                com.google.gson.Gson gson = new com.google.gson.Gson();
                                 com.google.gson.JsonArray oldArray = gson.fromJson(oldLog, com.google.gson.JsonArray.class);
                                 com.google.gson.JsonArray newArray = gson.fromJson(notesJsonContent, com.google.gson.JsonArray.class);
 
@@ -444,16 +453,16 @@ public class MainWindow extends JFrame {
                                 com.google.gson.GsonBuilder gsonBuilder = new com.google.gson.GsonBuilder();
                                 gsonBuilder.setPrettyPrinting();
                                 String mergedJson = gsonBuilder.create().toJson(oldArray);
-                                chartLogTextArea.setText(mergedJson);
+                                chartEditorPanel.setText(mergedJson);
                             } catch (Exception ex) {
                                 // 如果合并失败，直接追加
-                                chartLogTextArea.append("\n" + notesJsonContent);
+                                chartEditorPanel.setText(oldLog + "\n" + notesJsonContent);
                             }
                         } else {
                             return; // 取消
                         }
                     } else {
-                        chartLogTextArea.setText(notesJsonContent);
+                        chartEditorPanel.setText(notesJsonContent);
                     }
 
                     // 自动重载音符
@@ -534,7 +543,7 @@ public class MainWindow extends JFrame {
                 json.append("    \"difficulty\": {\n");
                 json.append("      \"name\": \"").append(difficultyName).append("\",\n");
                 json.append("      \"level\": ").append(difficultyLevel).append(",\n");
-                json.append("      \"color\": \"AQUA\"\n");
+                json.append("      \"color\": \"&b\"\n");
                 json.append("    },\n");
                 json.append("    \"audio\": \"").append(escapeJson(audioName)).append("\",\n");
                 json.append("    \"duration\": ").append(durationSeconds).append(",\n");
@@ -592,7 +601,7 @@ public class MainWindow extends JFrame {
             noGridPanel.repaint();
             logManager.log("切换输入模式: " + (isMouseFollowMode ? "鼠标跟随" : "手动输入"));
             updateCoordinateFieldStates();
-            if (!isMouseFollowMode && currentNoteType == NoteType.DOUBLE && isFirstDoublePlaced && firstDoublePoint != null) {
+            if (!isMouseFollowMode && (currentNoteType == NoteType.DOUBLE || currentNoteType == NoteType.FAKE_DOUBLE || currentNoteType == NoteType.MINE_DOUBLE) && isFirstDoublePlaced && firstDoublePoint != null) {
                 int centerX = noGridPanel.getWidth() / 2;
                 int centerY = noGridPanel.getHeight() / 2;
                 double x1_grid = (firstDoublePoint.x - centerX) / (double)CELL_SIZE;
@@ -609,7 +618,7 @@ public class MainWindow extends JFrame {
         int currentY = modeSwitchButton.getY() + modeSwitchButton.getHeight() + 10; // 从模式切换按钮下方10px开始
 
         // X坐标标签和输入框
-        JLabel xLabel = new JLabel("X坐标:");
+        xLabel = new JLabel("X坐标:");
         xLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 14));
         xLabel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 625, currentY, 50, 30);
 
@@ -641,7 +650,7 @@ public class MainWindow extends JFrame {
         currentY += xCoordField.getHeight() + 10; // 更新currentY
 
         // Y坐标标签和输入框
-        JLabel yLabel = new JLabel("Y坐标:");
+        yLabel = new JLabel("Y坐标:");
         yLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 14));
         yLabel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 625, currentY, 50, 30);
 
@@ -773,34 +782,59 @@ public class MainWindow extends JFrame {
         logTextArea.setBackground(new Color(240, 240, 240));
         logTextArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         
-        // 创建操作日志滚动面板
-        // 日志滚动面板
-        JScrollPane logScrollPane = new JScrollPane(logTextArea);
-        logScrollPane.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 300, 275, GRID_PANEL_SIZE - 250); // 调整高度与方框对齐
+        // 创建铺面 JSON 编辑器面板
+        chartEditorPanel = new JsonEditorPanel();
+
+        // 创建铺面编辑器容器面板
+        chartEditorContainer = new JPanel(new BorderLayout());
+        chartEditorContainer.setBorder(BorderFactory.createTitledBorder("铺面 JSON 编辑器"));
+        chartEditorContainer.add(chartEditorPanel, BorderLayout.CENTER);
+
+        // 拖拽分隔条（仅横向可拖）
+        JPanel dragHandle = new JPanel();
+        dragHandle.setBackground(new Color(180, 180, 200));
+        dragHandle.setCursor(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR));
+        dragHandle.setToolTipText("拖拽调整编辑器宽度");
+        final int[] dragStartX = {0};
+        final int[] dragStartW = {0};
+        dragHandle.addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) {
+                dragStartX[0] = SwingUtilities.convertMouseEvent(dragHandle, e, mainPanel).getX();
+                dragStartW[0] = jsonEditorWidth;
+            }
+        });
+        dragHandle.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override public void mouseDragged(MouseEvent e) {
+                int curX = SwingUtilities.convertMouseEvent(dragHandle, e, mainPanel).getX();
+                jsonEditorWidth = Math.max(150, dragStartW[0] + (curX - dragStartX[0]));
+                relayoutEditorColumns();
+            }
+        });
+
+        // 操作日志滚动面板
+        logScrollPane = new JScrollPane(logTextArea);
         logScrollPane.setBorder(BorderFactory.createTitledBorder("操作日志"));
 
-        // 创建铺面生成日志文本区域
-        chartLogTextArea = new JTextArea();
-        chartLogTextArea.setEditable(true); // 允许编辑
-        chartLogTextArea.setFont(new Font("Microsoft YaHei", Font.PLAIN, 10));
-        chartLogTextArea.setLineWrap(true);
-        chartLogTextArea.setWrapStyleWord(true);
-        chartLogTextArea.setBackground(new Color(240, 240, 240));
-        chartLogTextArea.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        
-        // 创建铺面生成日志滚动面板
-        JScrollPane chartLogScrollPane = new JScrollPane(chartLogTextArea);
-        chartLogScrollPane.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 325, 50, 275, GRID_PANEL_SIZE); // 调整高度与方框对齐
-        chartLogScrollPane.setBorder(BorderFactory.createTitledBorder("铺面生成日志"));
         // 在日志下方添加"重载"和"排序"按钮
-        JPanel chartLogButtonPanel = new JPanel();
-        chartLogButtonPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        chartLogButtonPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 325, 60 + GRID_PANEL_SIZE, 275, 40);
+        chartLogButtonPanel = new JPanel();
+        chartLogButtonPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 6, 2));
         JButton reloadButton = new JButton("重载");
         JButton sortButton = new JButton("排序");
+        JButton formatJsonButton = new JButton("格式化");
+        JButton templateButton = new JButton("动画模板");
+        JButton wrapperButton = new JButton("模板包装器");
         chartLogButtonPanel.add(reloadButton);
         chartLogButtonPanel.add(sortButton);
+        chartLogButtonPanel.add(formatJsonButton);
+        chartLogButtonPanel.add(templateButton);
+        chartLogButtonPanel.add(wrapperButton);
         mainPanel.add(chartLogButtonPanel);
+        templateButton.addActionListener(e ->
+            org.AcidAluminum.cubeRhythm.ui.AnimationTemplateWindow.open(this));
+        wrapperButton.addActionListener(e ->
+            org.AcidAluminum.cubeRhythm.ui.TemplateWrapperDialog.open(this, () ->
+                org.AcidAluminum.cubeRhythm.ui.AnimationTemplateWindow.open(this)));
+        formatJsonButton.addActionListener(e -> chartEditorPanel.formatJson());
         // "重载"按钮逻辑 - 从JSON文本加载音符
         reloadButton.addActionListener(e -> {
             try {
@@ -829,7 +863,7 @@ public class MainWindow extends JFrame {
         if (noteTypeExpandedPanel == null) {
             noteTypeExpandedPanel = new JPanel();
             noteTypeExpandedPanel.setLayout(null);
-            noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, 180);
+            noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, GRID_PANEL_SIZE - 120);
             noteTypeExpandedPanel.add(noteTypePanel);
             noteTypeExpandedPanel.setVisible(false);
         }
@@ -847,8 +881,8 @@ public class MainWindow extends JFrame {
         if (logTextArea == null) {
             logTextArea = new JTextArea();
         }
-        if (chartLogTextArea == null) {
-            chartLogTextArea = new JTextArea();
+        if (chartEditorPanel == null) {
+            chartEditorPanel = new JsonEditorPanel();
         }
         // 先add编辑区和NOTE类型选择UI，保证显示
         mainPanel.add(gridPanel);
@@ -867,8 +901,9 @@ public class MainWindow extends JFrame {
         mainPanel.add(y2CoordField);
         mainPanel.add(confirmButton);
         mainPanel.add(songInfoPanel);
+        mainPanel.add(dragHandle);
         mainPanel.add(logScrollPane);
-        mainPanel.add(chartLogScrollPane);
+        mainPanel.add(chartEditorContainer);
         mainPanel.add(notePropertyPanel);
         mainPanel.add(doubleNoteTipLabel);
         mainPanel.add(noteTypeExpandedPanel);
@@ -933,15 +968,6 @@ public class MainWindow extends JFrame {
         measureBeatLabel.setBounds(LEFT_MARGIN, GRID_PANEL_SIZE + 120, 200, 20); // 调整位置到时间下方
         mainPanel.add(measureBeatLabel);
 
-        // 添加获取焦点按钮
-        JButton focusButton = new JButton("获取焦点(←→)");
-        focusButton.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
-        focusButton.setBounds(LEFT_MARGIN + 210, GRID_PANEL_SIZE + 120, 120, 20);
-        focusButton.addActionListener(e -> {
-            mainPanel.requestFocusInWindow();
-            logManager.log("已获取焦点，可使用←→键按拍调整进度");
-        });
-        mainPanel.add(focusButton);
 
         // 添加音乐控制按钮
         JButton playPauseButton = new JButton("播放/暂停");
@@ -1075,11 +1101,11 @@ public class MainWindow extends JFrame {
                 }
             }
         });
-        noteTypeButtonPanel.setBounds(0, 0, 250, 180);
+        noteTypeButtonPanel.setBounds(0, 0, 250, GRID_PANEL_SIZE - 120);
         // NOTE类型折叠面板
         noteTypeExpandedPanel = new JPanel();
         noteTypeExpandedPanel.setLayout(null);
-        noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, 180);
+        noteTypeExpandedPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 25, 120, 250, GRID_PANEL_SIZE - 120);
         noteTypeExpandedPanel.add(noteTypeButtonPanel);
         noteTypeExpandedPanel.setVisible(false);
         // 添加到主面板
@@ -1108,29 +1134,25 @@ public class MainWindow extends JFrame {
      */
     private void updateCoordinateFieldStates() {
         if (isMouseFollowMode) {
-            // 鼠标跟随模式：所有输入框禁用
             xCoordField.setEnabled(false);
             yCoordField.setEnabled(false);
             x2CoordField.setEnabled(false);
             y2CoordField.setEnabled(false);
         } else {
-            // 手动输入模式
-            if (currentNoteType == NoteType.DOUBLE) {
-                // Double音符：所有输入框启用
+            if (currentNoteType == NoteType.DOUBLE || currentNoteType == NoteType.FAKE_DOUBLE || currentNoteType == NoteType.MINE_DOUBLE) {
                 xCoordField.setEnabled(true);
                 yCoordField.setEnabled(true);
                 x2CoordField.setEnabled(true);
                 y2CoordField.setEnabled(true);
             } else if (currentNoteType == NoteType.EXECUTION ||
                        currentNoteType == NoteType.FLICK_LEFT ||
-                       currentNoteType == NoteType.FLICK_RIGHT) {
-                // Execution或Flick音符：所有输入框禁用
+                       currentNoteType == NoteType.FLICK_RIGHT ||
+                       currentNoteType == NoteType.FAKE_FLICK) {
                 xCoordField.setEnabled(false);
                 yCoordField.setEnabled(false);
                 x2CoordField.setEnabled(false);
                 y2CoordField.setEnabled(false);
             } else {
-                // 其他音符（TAP, HOLD, CHAIN, DRAG）：只启用x1, y1
                 xCoordField.setEnabled(true);
                 yCoordField.setEnabled(true);
                 x2CoordField.setEnabled(false);
@@ -1166,17 +1188,17 @@ public class MainWindow extends JFrame {
                 // 绘制边框
                 g.setColor(Color.BLACK);
                 g.drawRect(0, 0, getWidth() - 1, getHeight() - 1);
-                
+
                 // 绘制中心原点
                 g.setColor(Color.RED);
                 int centerX = getWidth() / 2;
                 int centerY = getHeight() / 2;
                 g.fillOval(centerX - 3, centerY - 3, 6, 6);
-                
+
                 // 绘制刻度
                 g.setColor(Color.BLACK);
                 g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-                
+
                 // 绘制水平刻度（上方）
                 for (int i = -3; i <= 3; i++) {
                     int x = centerX + i * CELL_SIZE;
@@ -1189,7 +1211,7 @@ public class MainWindow extends JFrame {
                         g.drawString(String.valueOf(i + 0.5), xHalf - 5, 20);
                     }
                 }
-                
+
                 // 绘制垂直刻度（左侧）
                 for (int i = -3; i <= 3; i++) {
                     int y = centerY - i * CELL_SIZE;
@@ -1202,89 +1224,81 @@ public class MainWindow extends JFrame {
                         g.drawString(String.valueOf(i + 0.5), 10, yHalf + 5);
                     }
                 }
-                
+
                 // ---------- 伪3D NOTE动画显示 ----------
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+                g2.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_SPEED);
+                List<Note> notesToShow = null;
+                double currentBeat = 0;
                 if (musicPlayer != null && beatCalculator != null && noteManager != null) {
                     long currentTime = musicPlayer.getCurrentTimeMicroseconds();
-                    double currentBeat = beatCalculator.microsecondsToBeats(currentTime);
-                    java.util.List<Note> notesToShow = noteManager.getNotesForCurrentBeat(currentTime, displayBeatsCount, beatCalculator);
+                    currentBeat = beatCalculator.microsecondsToBeats(currentTime);
+                    notesToShow = noteManager.getNotesForCurrentBeat(currentTime, displayBeatsCount, beatCalculator);
                     centerX = getWidth() / 2;
                     centerY = getHeight() / 2;
                     int n = displayBeatsCount - 1;
-                    // 按拍数降序排序，保证后拍NOTE先绘制，前拍NOTE后绘制（在上层）
-                    notesToShow.sort((a, b) -> Double.compare(
-                        beatCalculator.microsecondsToBeats(b.getTimeMicroseconds()),
-                        beatCalculator.microsecondsToBeats(a.getTimeMicroseconds())
-                    ));
+                    Composite defaultComposite = g2.getComposite();
                     for (Note note : notesToShow) {
-                        // 将音符时间转换为拍数，然后四舍五入到最近的整拍
-                        double exactNoteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
-                        double noteBeat = Math.round(exactNoteBeat); // 四舍五入到整拍
+                        double noteBeat = Math.round(beatCalculator.microsecondsToBeats(note.getTimeMicroseconds()));
                         double k = noteBeat - currentBeat;
                         if (k < 0 || k > n) continue;
-                        // 伪3D动画进度
                         double progress = (n == 0) ? 1.0 : (n - k) / n;
+                        float alphaF = (float)(1.0 - (k / n) * (1.0 - 80.0/255));
+                        alphaF = Math.max(0f, Math.min(1f, alphaF));
+                        g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alphaF));
 
-                        // 对于DOUBLE音符，需要绘制两个位置
                         int positionsToRender = note.isDouble() ? 2 : 1;
                         for (int pos = 0; pos < positionsToRender; pos++) {
-                            // 目标像素坐标
                             double x = (pos == 0 ? note.getX() : note.getX2()) * 100;
                             double y = -(pos == 0 ? note.getY() : note.getY2()) * 100;
-                            // 起点（内部方框投影）
-                            double x0 = x / 5.0;
-                            double y0 = y / 5.0;
-                            // 插值位置
+                            double x0 = x / 5.0, y0 = y / 5.0;
                             double cx = x0 + (x - x0) * progress;
                             double cy = y0 + (y - y0) * progress;
-                            // 插值大小
-                            double size = 20 + (100 - 20) * progress;
-                            // 透明度插值
-                            int alpha = (int)(255 - (k / n) * (255 - 80));
-                            alpha = Math.max(0, Math.min(255, alpha));
-                            // 填充色为NOTE类型色
-                            Color fillColor = note.getColor();
-                            g.setColor(new Color(fillColor.getRed(), fillColor.getGreen(), fillColor.getBlue(), alpha));
-                            g.fillRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
-                            // 朝向边框
-                            Graphics2D g2 = (Graphics2D) g;
-                            Color borderColor = NOTE_BORDER_W;
-                            borderColor = switch (note.getDirection() != null ? note.getDirection() : "w") {
+                            double size = 20 + 80 * progress;
+                            int rx = (int)(centerX + cx - size / 2);
+                            int ry = (int)(centerY + cy - size / 2);
+                            int rs = (int) size;
+                            g2.setColor(note.getColor());
+                            g2.fillRect(rx, ry, rs, rs);
+                            if (note.isFake()) drawCheckerboard(g2, rx, ry, rs, rs, (int)(alphaF * 255));
+                            if (note.isMine()) drawCrossPattern(g2, rx, ry, rs, rs, (int)(alphaF * 255));
+                            Color borderColor = switch (note.getDirection() != null ? note.getDirection() : "w") {
                                 case "a" -> NOTE_BORDER_A;
                                 case "s" -> NOTE_BORDER_S;
                                 case "d" -> NOTE_BORDER_D;
-                                default -> borderColor;
+                                default -> NOTE_BORDER_W;
                             };
                             g2.setStroke(NOTE_BORDER_STROKE);
                             g2.setColor(borderColor);
-                            g2.drawRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
-                            // 发光
+                            g2.drawRect(rx, ry, rs, rs);
                             if (note.isGlowing()) {
                                 g2.setColor(NOTE_GLOW_COLOR);
                                 g2.setStroke(NOTE_GLOW_STROKE);
-                                int px = (int)(centerX + cx);
-                                int py = (int)(centerY + cy);
-                                g2.drawLine(px-2, py, px+2, py);
-                                g2.drawLine(px, py-2, px, py+2);
+                                int px = (int)(centerX + cx), py = (int)(centerY + cy);
+                                g2.drawLine(px - 2, py, px + 2, py);
+                                g2.drawLine(px, py - 2, px, py + 2);
                             }
                         }
                     }
+                    g2.setComposite(defaultComposite);
                 }
+                // Execution action 可视化
+                renderExecutionActions(g, notesToShow, centerX, centerY, currentBeat, displayBeatsCount, getWidth());
                 // 仅在无网格模式下显示跟随鼠标的NOTE，不吸附
-                if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT) {
-                    Color noteColor = currentNoteType.getColor();
-                    Color transparentColor = new Color(
-                            noteColor.getRed(), 
-                            noteColor.getGreen(), 
-                            noteColor.getBlue(), 
-                            180); // 透明度
-                    g.setColor(transparentColor);
+                if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION &&
+                        currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT &&
+                        currentNoteType != NoteType.FAKE_FLICK) {
+                    Graphics2D g2p = (Graphics2D) g;
+                    Composite prev = g2p.getComposite();
+                    g2p.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 180f/255f));
+                    g2p.setColor(currentNoteType.getColor());
                     int squareX = mousePosition.x - FOLLOW_SQUARE_SIZE / 2;
                     int squareY = mousePosition.y - FOLLOW_SQUARE_SIZE / 2;
-                    g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                    g.setColor(currentNoteType.getColor());
-                    g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                    g2p.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                    g2p.setComposite(prev);
+                    g2p.setColor(currentNoteType.getColor());
+                    g2p.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
                 }
             }
         };
@@ -1299,8 +1313,9 @@ public class MainWindow extends JFrame {
                 
                 // 更新位置显示标签
                 if (currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && 
-                    currentNoteType != NoteType.FLICK_RIGHT) {
+                    currentNoteType != NoteType.FLICK_LEFT &&
+                    currentNoteType != NoteType.FLICK_RIGHT &&
+                    currentNoteType != NoteType.FAKE_FLICK) {
                     
                     int actualNoteCenterX_px;
                     int actualNoteCenterY_px;
@@ -1351,15 +1366,14 @@ public class MainWindow extends JFrame {
         panel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // 右键删除音符
                 if (SwingUtilities.isRightMouseButton(e)) {
                     Note clickedNote = findNoteAtPosition(e.getX(), e.getY(), panel);
-                    if (clickedNote != null) {
-                        noteManager.removeNote(clickedNote);
-                        updateChartLogJson();
-                        panel.repaint();
-                        logManager.log("已删除音符");
-                    }
+                    showNoteContextMenu(panel, e.getX(), e.getY(), clickedNote);
+                    return;
+                }
+
+                if (isContextMenuOpen) {
+                    isContextMenuOpen = false;
                     return;
                 }
 
@@ -1373,18 +1387,22 @@ public class MainWindow extends JFrame {
                 String direction = getDirection();
                 boolean isGlowing = glowCheckBox.isSelected();
 
-                if (currentNoteType == NoteType.EXECUTION || 
+                if (currentNoteType == NoteType.EXECUTION ||
                     currentNoteType == NoteType.FLICK_LEFT ||
-                    currentNoteType == NoteType.FLICK_RIGHT) {
+                    currentNoteType == NoteType.FLICK_RIGHT ||
+                    currentNoteType == NoteType.FAKE_FLICK) {
                     if (currentNoteType == NoteType.EXECUTION) {
-                        noteManager.addNote(new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds()));
+                        Note note = new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds());
+                        noteManager.addNote(note);
                         updateChartLogJson();
                     } else {
-                        String flickDirection = currentNoteType == NoteType.FLICK_LEFT ? "left" : "right";
-                        noteManager.addNote(new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, flickDirection, isGlowing));
+                        String flickDirection = (currentNoteType == NoteType.FLICK_LEFT) ? "left" : "right";
+                        Note note = new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, flickDirection, isGlowing);
+                        note.setTag(tagField.getText().trim());
+                        noteManager.addNote(note);
                         updateChartLogJson();
                     }
-                } else if (currentNoteType == NoteType.DOUBLE) {
+                } else if (currentNoteType == NoteType.DOUBLE || currentNoteType == NoteType.FAKE_DOUBLE || currentNoteType == NoteType.MINE_DOUBLE) {
                     if (!isFirstDoublePlaced) {
                         // 放置第一个Double音符
                         firstDoublePoint = new Point(e.getX(), e.getY()); // 保存原始像素坐标
@@ -1452,8 +1470,10 @@ public class MainWindow extends JFrame {
                         if (y2_final == -0.0) y2_final = 0.0;
 
                         // 添加Double音符到noteManager并更新日志
-                        noteManager.addNote(new Note(x1_final, y1_final, x2_final, y2_final,
-                            NoteType.DOUBLE, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        Note doubleNote = new Note(x1_final, y1_final, x2_final, y2_final,
+                            currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing);
+                        doubleNote.setTag(tagField.getText().trim());
+                        noteManager.addNote(doubleNote);
                         updateChartLogJson();
 
                         // 重置状态
@@ -1490,7 +1510,9 @@ public class MainWindow extends JFrame {
                         if (finalGridX == -0.0) finalGridX = 0.0;
                         if (finalGridY == -0.0) finalGridY = 0.0;
                         // 添加NOTE到noteManager
-                        noteManager.addNote(new Note(finalGridX, finalGridY, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        Note singleNote = new Note(finalGridX, finalGridY, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing);
+                        singleNote.setTag(tagField.getText().trim());
+                        noteManager.addNote(singleNote);
                         updateChartLogJson();
                         panel.repaint();
                     } else {
@@ -1508,7 +1530,9 @@ public class MainWindow extends JFrame {
                         if (x == -0.0) x = 0.0;
                         if (y == -0.0) y = 0.0;
                         // 添加NOTE到noteManager
-                        noteManager.addNote(new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        Note freeNote = new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing);
+                        freeNote.setTag(tagField.getText().trim());
+                        noteManager.addNote(freeNote);
                         updateChartLogJson();
                         panel.repaint();
                     }
@@ -1572,12 +1596,31 @@ public class MainWindow extends JFrame {
         chartAuthorField.setBounds(70, yOffset, fieldWidth, fieldHeight);
         yOffset += verticalSpacing;
         
-        // 难度
+        // 难度名称
         JLabel difficultyLabel = new JLabel("难度:");
         difficultyLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
         difficultyLabel.setBounds(10, yOffset, labelWidth, fieldHeight);
         difficultyField = new JTextField();
         difficultyField.setBounds(70, yOffset, fieldWidth, fieldHeight);
+        yOffset += verticalSpacing;
+
+        // 难度等级
+        JLabel difficultyLevelLabel = new JLabel("等级:");
+        difficultyLevelLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        difficultyLevelLabel.setBounds(10, yOffset, labelWidth, fieldHeight);
+        difficultyLevelField = new JTextField("1");
+        difficultyLevelField.setBounds(70, yOffset, 50, fieldHeight);
+        difficultyLevelField.setToolTipText("1-15");
+        // 难度颜色（同一行右侧）
+        JLabel difficultyColorLabel = new JLabel("颜色:");
+        difficultyColorLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        difficultyColorLabel.setBounds(130, yOffset, 35, fieldHeight);
+        difficultyColorCombo = new JComboBox<>(new String[]{
+            "&b (AQUA)", "&a (GREEN)", "&c (RED)", "&e (YELLOW)",
+            "&5 (PURPLE)", "&6 (GOLD)", "&f (WHITE)", "&7 (GRAY)"
+        });
+        difficultyColorCombo.setBounds(165, yOffset, fieldWidth - 95, fieldHeight);
+        difficultyColorCombo.setFont(new Font("Microsoft YaHei", Font.PLAIN, 11));
         yOffset += verticalSpacing;
         
         // 时长
@@ -1713,6 +1756,10 @@ public class MainWindow extends JFrame {
         expandedPanel.add(chartAuthorField);
         expandedPanel.add(difficultyLabel);
         expandedPanel.add(difficultyField);
+        expandedPanel.add(difficultyLevelLabel);
+        expandedPanel.add(difficultyLevelField);
+        expandedPanel.add(difficultyColorLabel);
+        expandedPanel.add(difficultyColorCombo);
         expandedPanel.add(durationLabel);
         expandedPanel.add(durationField);
         expandedPanel.add(offsetLabel);
@@ -1758,7 +1805,7 @@ public class MainWindow extends JFrame {
         int notePropertyPanelY = basePanelY + songInfoPanelCalculatedHeight + 10; // 留出10px间距
 
         // NOTE属性面板的高度
-        int notePropertyPanelCalculatedHeight = notePropertyToggleButton.isSelected() ? 180 : 30; // 根据是否展开设置高度
+        int notePropertyPanelCalculatedHeight = notePropertyToggleButton.isSelected() ? 230 : 30;
         notePropertyPanel.setBounds(LEFT_MARGIN + GRID_PANEL_SIZE + 625, notePropertyPanelY, 250, notePropertyPanelCalculatedHeight);
 
         // 调整主面板大小以容纳所有组件
@@ -1766,11 +1813,56 @@ public class MainWindow extends JFrame {
         int musicControlsBottomY = timeSlider.getY() + timeSlider.getHeight() + 30; // 进度条下方30px
         int contentBottomY = Math.max(notePropertyPanelY + notePropertyPanelCalculatedHeight, musicControlsBottomY);
         mainPanel.setPreferredSize(new Dimension(mainPanel.getWidth(), contentBottomY + 20));
+        relayoutEditorColumns();
         mainPanel.revalidate();
         mainPanel.repaint();
         this.requestFocusInWindow(); // 确保主窗口在布局调整后重新获取焦点
     }
-    
+
+    private void relayoutEditorColumns() {
+        if (chartEditorContainer == null || logScrollPane == null || chartLogButtonPanel == null) return;
+        int editorX = LEFT_MARGIN + GRID_PANEL_SIZE + 325;
+        int editorY = 50;
+        int editorH = GRID_PANEL_SIZE;
+        int handleW = 6;
+        int logW = 275;
+
+        chartEditorContainer.setBounds(editorX, editorY, jsonEditorWidth, editorH);
+        // 分隔条紧贴编辑区右侧
+        // dragHandle is the 3rd child after songInfoPanel in add order; find by name not reliable in null layout
+        // iterate mainPanel children to find the drag handle by cursor
+        for (Component c : mainPanel.getComponents()) {
+            if (c.getCursor().getType() == Cursor.E_RESIZE_CURSOR && c != chartEditorContainer) {
+                c.setBounds(editorX + jsonEditorWidth, editorY, handleW, editorH);
+                break;
+            }
+        }
+        int logX = editorX + jsonEditorWidth + handleW;
+        logScrollPane.setBounds(logX, editorY, logW, editorH);
+        chartLogButtonPanel.setBounds(editorX, editorY + editorH + 10, jsonEditorWidth, 60);
+
+        // 右侧第一列随编辑区宽度动态偏移（gap=19固定）
+        int rightColX = logX + logW + 19;
+        if (modeSwitchButton != null) modeSwitchButton.setLocation(rightColX, modeSwitchButton.getY());
+        if (xLabel != null) xLabel.setLocation(rightColX, xLabel.getY());
+        if (xCoordField != null) xCoordField.setLocation(rightColX + 60, xCoordField.getY());
+        if (yLabel != null) yLabel.setLocation(rightColX, yLabel.getY());
+        if (yCoordField != null) yCoordField.setLocation(rightColX + 60, yCoordField.getY());
+        if (positionLabel != null) positionLabel.setLocation(rightColX, positionLabel.getY());
+        if (doubleNoteTipLabel != null) doubleNoteTipLabel.setLocation(rightColX, doubleNoteTipLabel.getY());
+        if (x2Label != null) x2Label.setLocation(rightColX, x2Label.getY());
+        if (x2CoordField != null) x2CoordField.setLocation(rightColX + 60, x2CoordField.getY());
+        if (y2Label != null) y2Label.setLocation(rightColX, y2Label.getY());
+        if (y2CoordField != null) y2CoordField.setLocation(rightColX + 60, y2CoordField.getY());
+        if (confirmButton != null) confirmButton.setLocation(rightColX, confirmButton.getY());
+        if (songInfoPanel != null) songInfoPanel.setLocation(rightColX, songInfoPanel.getY());
+        if (notePropertyPanel != null) notePropertyPanel.setLocation(rightColX, notePropertyPanel.getY());
+
+        mainPanel.revalidate();
+        mainPanel.repaint();
+    }
+
+
     /**
      * 保存歌曲信息
      */
@@ -1900,7 +1992,7 @@ public class MainWindow extends JFrame {
         // 创建展开面板
         notePropertyExpandedPanel = new JPanel();
         notePropertyExpandedPanel.setLayout(null);
-        notePropertyExpandedPanel.setBounds(0, 30, 250, 150);
+        notePropertyExpandedPanel.setBounds(0, 30, 250, 200);
         
         // 创建朝向设置
         directionToggleButton = new JToggleButton("朝向设置 ▼");
@@ -1954,16 +2046,27 @@ public class MainWindow extends JFrame {
         // 创建发光选项
         glowCheckBox = new JCheckBox("发光");
         glowCheckBox.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
-        glowCheckBox.setBounds(10, 110, 230, 25); // 调整Y坐标以确保显示
+        glowCheckBox.setBounds(10, 110, 100, 25);
         glowCheckBox.addActionListener(e -> {
             logManager.log("发光选项切换: " + glowCheckBox.isSelected());
-            SwingUtilities.invokeLater(this::requestFocusInWindow); // 发光选项切换后重新获取焦点
+            SwingUtilities.invokeLater(this::requestFocusInWindow);
         });
+
+        // 创建Tag输入
+        JLabel tagLabel = new JLabel("Tags:");
+        tagLabel.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        tagLabel.setBounds(10, 140, 40, 25);
+        tagField = new JTextField();
+        tagField.setFont(new Font("Microsoft YaHei", Font.PLAIN, 12));
+        tagField.setBounds(50, 140, 190, 25);
+        tagField.setToolTipText("多标签用逗号分隔，如: spiral, wave, glow");
 
         // 添加组件到展开面板
         notePropertyExpandedPanel.add(directionToggleButton);
         notePropertyExpandedPanel.add(directionExpandedPanel);
         notePropertyExpandedPanel.add(glowCheckBox);
+        notePropertyExpandedPanel.add(tagLabel);
+        notePropertyExpandedPanel.add(tagField);
         
         // 添加组件到主面板
         notePropertyPanel.add(notePropertyToggleButton);
@@ -2064,34 +2167,11 @@ public class MainWindow extends JFrame {
                     g.drawString(String.valueOf(i), 10, y + 5);
                 }
                 
-                // 绘制当前NOTE（在网格模式下，仍吸附有效点）
-                if (currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && 
-                    currentNoteType != NoteType.FLICK_RIGHT) {
-                    // 获取当前NOTE类型的颜色，并设置半透明
-                    Color noteColor = currentNoteType.getColor();
-                    Color transparentColor = new Color(
-                            noteColor.getRed(), 
-                            noteColor.getGreen(), 
-                            noteColor.getBlue(), 
-                            180);
-                    
-                    g.setColor(transparentColor);
-                    
-                    // 计算最近的网格点
-                    Point nearestPoint = findNearestGridPoint(mousePosition.x, mousePosition.y);
-                    
-                    // 绘制NOTE方块，确保居中，移除额外偏移
-                    int squareX = nearestPoint.x - FOLLOW_SQUARE_SIZE / 2;
-                    int squareY = nearestPoint.y - FOLLOW_SQUARE_SIZE / 2;
-                    g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                    
-                    // 绘制边框
-                    g.setColor(currentNoteType.getColor());
-                    g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                }
                 
                 // ---------- 伪3D NOTE动画显示 ----------
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+                g2.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_SPEED);
                 if (musicPlayer != null && beatCalculator != null && noteManager != null) {
                     long currentTime = musicPlayer.getCurrentTimeMicroseconds() + getCurrentOffsetMicroseconds();
                     double currentBeat = beatCalculator.microsecondsToBeats(currentTime);
@@ -2099,84 +2179,68 @@ public class MainWindow extends JFrame {
                     centerX = getWidth() / 2;
                     centerY = getHeight() / 2;
                     int n = displayBeatsCount - 1;
-                    // 按拍数降序排序，保证后拍NOTE先绘制，前拍NOTE后绘制（在上层）
-                    notesToShow.sort((a, b) -> Double.compare(
-                        beatCalculator.microsecondsToBeats(b.getTimeMicroseconds()),
-                        beatCalculator.microsecondsToBeats(a.getTimeMicroseconds())
-                    ));
+                    Composite defaultComposite = g2.getComposite();
                     for (Note note : notesToShow) {
-                        // 将音符时间转换为拍数，然后四舍五入到最近的整拍
-                        double exactNoteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
-                        double noteBeat = Math.round(exactNoteBeat); // 四舍五入到整拍
+                        double noteBeat = Math.round(beatCalculator.microsecondsToBeats(note.getTimeMicroseconds()));
                         double k = noteBeat - currentBeat;
                         if (k < 0 || k > n) continue;
-                        // 伪3D动画进度
                         double progress = (n == 0) ? 1.0 : (n - k) / n;
+                        float alphaF = (float)(1.0 - (k / n) * (1.0 - 80.0/255));
+                        alphaF = Math.max(0f, Math.min(1f, alphaF));
+                        g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alphaF));
 
-                        // 对于DOUBLE音符，需要绘制两个位置
                         int positionsToRender = note.isDouble() ? 2 : 1;
                         for (int pos = 0; pos < positionsToRender; pos++) {
-                            // 目标像素坐标
                             double x = (pos == 0 ? note.getX() : note.getX2()) * 100;
                             double y = -(pos == 0 ? note.getY() : note.getY2()) * 100;
-                            // 起点（内部方框投影）
-                            double x0 = x / 5.0;
-                            double y0 = y / 5.0;
-                            // 插值位置
+                            double x0 = x / 5.0, y0 = y / 5.0;
                             double cx = x0 + (x - x0) * progress;
                             double cy = y0 + (y - y0) * progress;
-                            // 插值大小
-                            double size = 20 + (100 - 20) * progress;
-                            // 透明度插值
-                            int alpha = (int)(255 - (k / n) * (255 - 80));
-                            alpha = Math.max(0, Math.min(255, alpha));
-                            // 填充色为NOTE类型色
-                            Color fillColor = note.getColor();
-                            g.setColor(new Color(fillColor.getRed(), fillColor.getGreen(), fillColor.getBlue(), alpha));
-                            g.fillRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
-                            // 朝向边框
-                            Graphics2D g2 = (Graphics2D) g;
-                            Color borderColor = NOTE_BORDER_W;
-                            borderColor = switch (note.getDirection() != null ? note.getDirection() : "w") {
+                            double size = 20 + 80 * progress;
+                            int rx = (int)(centerX + cx - size/2);
+                            int ry = (int)(centerY + cy - size/2);
+                            int rs = (int)size;
+                            g2.setColor(note.getColor());
+                            g2.fillRect(rx, ry, rs, rs);
+                            if (note.isFake()) drawCheckerboard(g2, rx, ry, rs, rs, (int)(alphaF * 255));
+                            if (note.isMine()) drawCrossPattern(g2, rx, ry, rs, rs, (int)(alphaF * 255));
+                            Color borderColor = switch (note.getDirection() != null ? note.getDirection() : "w") {
                                 case "a" -> NOTE_BORDER_A;
                                 case "s" -> NOTE_BORDER_S;
                                 case "d" -> NOTE_BORDER_D;
-                                default -> borderColor;
+                                default -> NOTE_BORDER_W;
                             };
                             g2.setStroke(NOTE_BORDER_STROKE);
                             g2.setColor(borderColor);
-                            g2.drawRect((int)(centerX + cx - size/2), (int)(centerY + cy - size/2), (int)size, (int)size);
-                            // 发光
+                            g2.drawRect(rx, ry, rs, rs);
                             if (note.isGlowing()) {
                                 g2.setColor(NOTE_GLOW_COLOR);
                                 g2.setStroke(NOTE_GLOW_STROKE);
-                                int px = (int)(centerX + cx);
-                                int py = (int)(centerY + cy);
+                                int px = (int)(centerX + cx), py = (int)(centerY + cy);
                                 g2.drawLine(px-2, py, px+2, py);
                                 g2.drawLine(px, py-2, px, py+2);
                             }
                         }
                     }
+                    g2.setComposite(defaultComposite);
+                    // Execution action 可视化
+                    renderExecutionActions(g, notesToShow, centerX, centerY, currentBeat, displayBeatsCount, getWidth());
                 }
                 // 仅在网格模式下显示吸附后的NOTE，不显示跟随鼠标的NOTE
-                if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT) {
-                    // 获取当前NOTE类型的颜色，并设置半透明
-                    Color noteColor = currentNoteType.getColor();
-                    Color transparentColor = new Color(
-                            noteColor.getRed(), 
-                            noteColor.getGreen(), 
-                            noteColor.getBlue(), 
-                            180); // 透明度
-                    g.setColor(transparentColor);
-                    // 只吸附到最近的网格点
+                if (isMouseFollowMode && currentNoteType != NoteType.EXECUTION &&
+                    currentNoteType != NoteType.FLICK_LEFT && currentNoteType != NoteType.FLICK_RIGHT &&
+                    currentNoteType != NoteType.FAKE_FLICK) {
+                    Graphics2D g2p = (Graphics2D) g;
+                    Composite prev = g2p.getComposite();
+                    g2p.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 180f/255f));
+                    g2p.setColor(currentNoteType.getColor());
                     Point nearestPoint = findNearestGridPoint(mousePosition.x, mousePosition.y);
-                    int squareX = nearestPoint.x - FOLLOW_SQUARE_SIZE / 2;
-                    int squareY = nearestPoint.y - FOLLOW_SQUARE_SIZE / 2;
-                    g.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
-                    // 绘制边框
-                    g.setColor(currentNoteType.getColor());
-                    g.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                    int squareX = nearestPoint.x - FOLLOW_SQUARE_SIZE / 2 - 19;
+                    int squareY = nearestPoint.y - FOLLOW_SQUARE_SIZE / 2 - 25;
+                    g2p.fillRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
+                    g2p.setComposite(prev);
+                    g2p.setColor(currentNoteType.getColor());
+                    g2p.drawRect(squareX, squareY, FOLLOW_SQUARE_SIZE, FOLLOW_SQUARE_SIZE);
                 }
             }
         };
@@ -2191,8 +2255,9 @@ public class MainWindow extends JFrame {
                 
                 // 更新位置显示标签
                 if (currentNoteType != NoteType.EXECUTION && 
-                    currentNoteType != NoteType.FLICK_LEFT && 
-                    currentNoteType != NoteType.FLICK_RIGHT) {
+                    currentNoteType != NoteType.FLICK_LEFT &&
+                    currentNoteType != NoteType.FLICK_RIGHT &&
+                    currentNoteType != NoteType.FAKE_FLICK) {
                     
                     // 计算最近的网格点
                     Point nearestPoint = findNearestGridPoint(e.getX(), e.getY());
@@ -2211,8 +2276,8 @@ public class MainWindow extends JFrame {
                     if (finalGridX == -0.0) finalGridX = 0.0;
                     if (finalGridY == -0.0) finalGridY = 0.0;
 
-                    positionLabel.setText(String.format("NOTE位置: (%d, %d) (%s, %s)", 
-                                                        nearestPoint.x - centerX, nearestPoint.y - centerY, 
+                    positionLabel.setText(String.format("NOTE位置: (%d, %d) (%s, %s)",
+                                                        nearestPoint.x - centerX - 19, nearestPoint.y - centerY - 25,
                                                         formatCoordinateDisplay(finalGridX), formatCoordinateDisplay(finalGridY)));
                 } else {
                     // 对于Execution和Flick类型，它们没有固定坐标
@@ -2227,15 +2292,14 @@ public class MainWindow extends JFrame {
         panel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // 右键删除音符
                 if (SwingUtilities.isRightMouseButton(e)) {
                     Note clickedNote = findNoteAtPosition(e.getX(), e.getY(), panel);
-                    if (clickedNote != null) {
-                        noteManager.removeNote(clickedNote);
-                        updateChartLogJson();
-                        panel.repaint();
-                        logManager.log("已删除音符");
-                    }
+                    showNoteContextMenu(panel, e.getX(), e.getY(), clickedNote);
+                    return;
+                }
+
+                if (isContextMenuOpen) {
+                    isContextMenuOpen = false;
                     return;
                 }
 
@@ -2249,18 +2313,22 @@ public class MainWindow extends JFrame {
                 String direction = getDirection();
                 boolean isGlowing = glowCheckBox.isSelected();
 
-                if (currentNoteType == NoteType.EXECUTION || 
+                if (currentNoteType == NoteType.EXECUTION ||
                     currentNoteType == NoteType.FLICK_LEFT ||
-                    currentNoteType == NoteType.FLICK_RIGHT) {
+                    currentNoteType == NoteType.FLICK_RIGHT ||
+                    currentNoteType == NoteType.FAKE_FLICK) {
                     if (currentNoteType == NoteType.EXECUTION) {
-                        noteManager.addNote(new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds()));
+                        Note note = new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds());
+                        noteManager.addNote(note);
                         updateChartLogJson();
                     } else {
-                        String flickDirection = currentNoteType == NoteType.FLICK_LEFT ? "left" : "right";
-                        noteManager.addNote(new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, flickDirection, isGlowing));
+                        String flickDirection = (currentNoteType == NoteType.FLICK_LEFT) ? "left" : "right";
+                        Note note = new Note(currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, flickDirection, isGlowing);
+                        note.setTag(tagField.getText().trim());
+                        noteManager.addNote(note);
                         updateChartLogJson();
                     }
-                } else if (currentNoteType == NoteType.DOUBLE) {
+                } else if (currentNoteType == NoteType.DOUBLE || currentNoteType == NoteType.FAKE_DOUBLE || currentNoteType == NoteType.MINE_DOUBLE) {
                     if (!isFirstDoublePlaced) {
                         // 放置第一个Double音符
                         firstDoublePoint = new Point(e.getX(), e.getY()); // 保存原始像素坐标
@@ -2328,8 +2396,10 @@ public class MainWindow extends JFrame {
                         if (y2_final == -0.0) y2_final = 0.0;
 
                         // 添加Double音符到noteManager并更新日志
-                        noteManager.addNote(new Note(x1_final, y1_final, x2_final, y2_final,
-                            NoteType.DOUBLE, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        Note doubleNote = new Note(x1_final, y1_final, x2_final, y2_final,
+                            currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing);
+                        doubleNote.setTag(tagField.getText().trim());
+                        noteManager.addNote(doubleNote);
                         updateChartLogJson();
 
                         // 重置状态
@@ -2382,7 +2452,9 @@ public class MainWindow extends JFrame {
                         if (x == -0.0) x = 0.0;
                         if (y == -0.0) y = 0.0;
                         // 添加NOTE到noteManager
-                        noteManager.addNote(new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing));
+                        Note freeNote = new Note(x, y, currentNoteType, musicPlayer.getCurrentTimeMicroseconds(), direction, isGlowing);
+                        freeNote.setTag(tagField.getText().trim());
+                        noteManager.addNote(freeNote);
                     }
                     updateChartLogJson();
                     panel.repaint();
@@ -2626,81 +2698,302 @@ public class MainWindow extends JFrame {
                   .replace("\t", "\\t");
     }
 
-    /**
-     * 将Note对象转换为JSON格式字符串
-     */
-    private String noteToJson(Note note) {
-        StringBuilder json = new StringBuilder();
-        json.append("    {\n");
+    private static final BasicStroke CROSS_STROKE = new BasicStroke(2f);
+    private static final Color CHECKER_COLOR_OPAQUE = new Color(255, 255, 255);
+    private static final Color CROSS_COLOR_OPAQUE = new Color(139, 0, 0);
 
-        // 转换时间：从微秒转换为秒，保留2位小数
-        String timeSeconds = String.format("%.2f", note.getTimeMicroseconds() / 1_000_000.0);
+    private void drawCheckerboard(Graphics g, int x, int y, int w, int h, int alpha) {
+        g.setColor(CHECKER_COLOR_OPAQUE);
+        int cellSize = Math.max(4, w / 7);
+        for (int row = 0; row * cellSize < h; row++) {
+            for (int col = 0; col * cellSize < w; col++) {
+                if ((row + col) % 2 == 0) {
+                    int cw = Math.min(cellSize, w - col * cellSize);
+                    int ch = Math.min(cellSize, h - row * cellSize);
+                    g.fillRect(x + col * cellSize, y + row * cellSize, cw, ch);
+                }
+            }
+        }
+    }
 
-        // 根据NOTE类型生成不同的JSON结构
-        if (note.isExecution()) {
-            // Execution类型
-            json.append("      \"type\": \"execution\",\n");
-            json.append("      \"time\": ").append(timeSeconds).append(",\n");
-            json.append("      \"actions\": []\n");
-        } else if (note.isFlick()) {
-            // Flick类型
-            json.append("      \"type\": \"flick\",\n");
-            json.append("      \"time\": ").append(timeSeconds).append(",\n");
-            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
-            json.append("      \"face\": \"").append(face).append("\",\n");
-            String turn = note.getType() == NoteType.FLICK_LEFT ? "left" : "right";
-            json.append("      \"turn\": \"").append(turn).append("\",\n");
-            json.append("      \"glowing\": ").append(note.isGlowing()).append(",\n");
-            json.append("      \"tag\": \"\"\n");
-        } else if (note.isDouble()) {
-            // Double类型
-            json.append("      \"type\": \"double\",\n");
-            json.append("      \"time\": ").append(timeSeconds).append(",\n");
-            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
-            json.append("      \"face\": \"").append(face).append("\",\n");
-            json.append("      \"positions\": [\n");
-            json.append("        {\"x\": ").append(String.format("%.2f", note.getX())).append(", \"y\": ").append(String.format("%.2f", note.getY())).append("},\n");
-            json.append("        {\"x\": ").append(String.format("%.2f", note.getX2())).append(", \"y\": ").append(String.format("%.2f", note.getY2())).append("}\n");
-            json.append("      ],\n");
-            json.append("      \"glowing\": ").append(note.isGlowing()).append(",\n");
-            json.append("      \"tag\": \"\"\n");
-        } else {
-            // Tap, Drag, Hold类型
-            String typeStr = note.getType().toString().toLowerCase();
-            json.append("      \"type\": \"").append(typeStr).append("\",\n");
-            json.append("      \"time\": ").append(timeSeconds).append(",\n");
-            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
-            json.append("      \"face\": \"").append(face).append("\",\n");
-            json.append("      \"position\": {\"x\": ").append(String.format("%.2f", note.getX())).append(", \"y\": ").append(String.format("%.2f", note.getY())).append("},\n");
-            json.append("      \"glowing\": ").append(note.isGlowing()).append(",\n");
-            json.append("      \"tag\": \"\"\n");
+    private void drawCrossPattern(Graphics g, int x, int y, int w, int h, int alpha) {
+        Graphics2D g2 = (Graphics2D) g;
+        g2.setColor(CROSS_COLOR_OPAQUE);
+        g2.setStroke(CROSS_STROKE);
+        g2.drawLine(x, y, x + w, y + h);
+        g2.drawLine(x + w, y, x, y + h);
+    }
+
+    private void renderExecutionActions(Graphics g, List<Note> notesToShow, int centerX, int centerY,
+                                        double currentBeat, int displayBeats, int panelWidth) {
+        if (notesToShow == null || notesToShow.isEmpty()) return;
+
+        java.util.Map<String, List<Note>> tagIndex = new java.util.HashMap<>();
+        for (Note note : notesToShow) {
+            for (String tag : note.getTags()) {
+                tagIndex.computeIfAbsent(tag, k -> new java.util.ArrayList<>()).add(note);
+            }
         }
 
-        json.append("    }");
-        return json.toString();
+        Graphics2D g2 = (Graphics2D) g;
+        Font actionFont = new Font("Monospaced", Font.PLAIN, 9);
+        g2.setFont(actionFont);
+        int n = displayBeats - 1;
+        if (n <= 0) return;
+
+        java.util.Map<Note, Integer> noteLabelCount = new java.util.HashMap<>();
+        int playerActionY = 15;
+
+        for (Note note : notesToShow) {
+            if (!note.isExecution() || note.getActions() == null || note.getActions().isEmpty()) continue;
+
+            double noteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
+            double k = noteBeat - currentBeat;
+            if (k < 0 || k > n) continue;
+
+            for (int ai = 0; ai < note.getActions().size(); ai++) {
+                com.google.gson.JsonObject action = note.getActions().get(ai).getAsJsonObject();
+                if (!action.has("type")) continue;
+                String actionType = action.get("type").getAsString();
+
+                if (DIRECT_NOTE_ACTIONS.contains(actionType)) {
+                    if (!action.has("bind_tag")) continue;
+                    com.google.gson.JsonArray bindTags = action.getAsJsonArray("bind_tag");
+                    if (bindTags == null) continue;
+                    for (int ti = 0; ti < bindTags.size(); ti++) {
+                        String tag = bindTags.get(ti).getAsString();
+                        List<Note> targets = tagIndex.get(tag);
+                        if (targets == null) continue;
+                        for (Note target : targets) {
+                            double targetBeat = beatCalculator.microsecondsToBeats(target.getTimeMicroseconds());
+                            double tk = targetBeat - currentBeat;
+                            if (tk < 0 || tk > n) continue;
+                            double progress = (n - tk) / n;
+                            double tx = target.getX() * 100;
+                            double ty = -target.getY() * 100;
+                            double x0 = tx / 5.0;
+                            double y0 = ty / 5.0;
+                            double cx = x0 + (tx - x0) * progress;
+                            double cy = y0 + (ty - y0) * progress;
+                            double size = 20 + (100 - 20) * progress;
+                            int labelIdx = noteLabelCount.getOrDefault(target, 0);
+                            noteLabelCount.put(target, labelIdx + 1);
+                            int lx = (int)(centerX + cx - size / 2) + 2;
+                            int ly = (int)(centerY + cy - size / 2) + 10 + labelIdx * 10;
+                            g2.setColor(Color.WHITE);
+                            g2.drawString(actionType, lx, ly);
+                        }
+                    }
+                } else if (INDIRECT_NOTE_ACTIONS.contains(actionType)) {
+                    String face = action.has("face") ? action.get("face").getAsString() : "w";
+                    Color actionColor = switch (face) {
+                        case "a" -> NOTE_BORDER_A;
+                        case "s" -> NOTE_BORDER_S;
+                        case "d" -> NOTE_BORDER_D;
+                        default -> NOTE_BORDER_W;
+                    };
+                    g2.setColor(actionColor);
+                    if ("draw_line".equals(actionType) && action.has("from") && action.has("to")) {
+                        com.google.gson.JsonObject from = action.getAsJsonObject("from");
+                        com.google.gson.JsonObject to = action.getAsJsonObject("to");
+                        int x1 = centerX + (int)(from.get("x").getAsDouble() * CELL_SIZE);
+                        int y1 = centerY - (int)(from.get("y").getAsDouble() * CELL_SIZE);
+                        int x2 = centerX + (int)(to.get("x").getAsDouble() * CELL_SIZE);
+                        int y2 = centerY - (int)(to.get("y").getAsDouble() * CELL_SIZE);
+                        g2.setStroke(new BasicStroke(2f));
+                        g2.drawLine(x1, y1, x2, y2);
+                    } else if ("draw_text".equals(actionType) && action.has("position")) {
+                        com.google.gson.JsonObject pos = action.getAsJsonObject("position");
+                        int tx = centerX + (int)(pos.get("x").getAsDouble() * CELL_SIZE);
+                        int ty = centerY - (int)(pos.get("y").getAsDouble() * CELL_SIZE);
+                        String text = action.has("text") ? action.get("text").getAsString() : "";
+                        text = text.replaceAll("§.", "");
+                        g2.setFont(new Font("Monospaced", Font.BOLD, 11));
+                        g2.drawString(text, tx, ty);
+                        g2.setFont(actionFont);
+                    }
+                } else if (PLAYER_ACTIONS.contains(actionType)) {
+                    g2.setColor(Color.DARK_GRAY);
+                    g2.setFont(new Font("Monospaced", Font.PLAIN, 10));
+                    g2.drawString(actionType, panelWidth - 120, playerActionY);
+                    playerActionY += 13;
+                    g2.setFont(actionFont);
+                }
+            }
+        }
     }
 
     /**
-     * 更新铺面日志为JSON格式
+     * 将Note对象转换为Gson JsonObject
      */
-    private void updateChartLogJson() {
-        if (chartLogTextArea == null) return;
+    private com.google.gson.JsonObject noteToJsonObject(Note note) {
+        com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+        double timeSeconds = note.getTimeMicroseconds() / 1_000_000.0;
 
-        StringBuilder json = new StringBuilder();
-        json.append("[\n");
-
-        List<Note> notes = noteManager.getNotes();
-        for (int i = 0; i < notes.size(); i++) {
-            Note note = notes.get(i);
-            json.append(noteToJson(note));
-            if (i < notes.size() - 1) {
-                json.append(",");
-            }
-            json.append("\n");
+        if (note.isExecution()) {
+            json.addProperty("type", "execution");
+            json.addProperty("time", timeSeconds);
+            json.add("actions", note.getActions() != null ? note.getActions() : new com.google.gson.JsonArray());
+        } else if (note.isFlick()) {
+            json.addProperty("type", note.getType().getJsonName());
+            json.addProperty("time", timeSeconds);
+            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
+            json.addProperty("face", face);
+            String turn = (note.getType() == NoteType.FLICK_LEFT) ? "left" : "right";
+            json.addProperty("turn", turn);
+            json.addProperty("glowing", note.isGlowing());
+            addTagsToJson(json, note);
+        } else if (note.isDouble()) {
+            json.addProperty("type", note.getType().getJsonName());
+            json.addProperty("time", timeSeconds);
+            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
+            json.addProperty("face", face);
+            com.google.gson.JsonArray positions = new com.google.gson.JsonArray();
+            com.google.gson.JsonObject pos1 = new com.google.gson.JsonObject();
+            pos1.addProperty("x", note.getX());
+            pos1.addProperty("y", note.getY());
+            com.google.gson.JsonObject pos2 = new com.google.gson.JsonObject();
+            pos2.addProperty("x", note.getX2());
+            pos2.addProperty("y", note.getY2());
+            positions.add(pos1);
+            positions.add(pos2);
+            json.add("positions", positions);
+            json.addProperty("glowing", note.isGlowing());
+            addTagsToJson(json, note);
+        } else {
+            json.addProperty("type", note.getType().getJsonName());
+            json.addProperty("time", timeSeconds);
+            String face = note.getDirection() != null ? note.getDirection().toLowerCase() : "w";
+            json.addProperty("face", face);
+            com.google.gson.JsonObject position = new com.google.gson.JsonObject();
+            position.addProperty("x", note.getX());
+            position.addProperty("y", note.getY());
+            json.add("position", position);
+            json.addProperty("glowing", note.isGlowing());
+            addTagsToJson(json, note);
         }
 
-        json.append("]");
-        chartLogTextArea.setText(json.toString());
+        if (note.getEvents() != null) {
+            json.add("events", note.getEvents());
+        }
+
+        return json;
+    }
+
+    private void addTagsToJson(com.google.gson.JsonObject json, Note note) {
+        List<String> tags = note.getTags();
+        if (tags.isEmpty()) {
+            json.addProperty("tag", "");
+        } else if (tags.size() == 1) {
+            json.addProperty("tag", tags.get(0));
+        } else {
+            com.google.gson.JsonArray tagsArray = new com.google.gson.JsonArray();
+            for (String tag : tags) {
+                tagsArray.add(tag);
+            }
+            json.add("tags", tagsArray);
+        }
+    }
+
+    /**
+     * 将Note对象转换为JSON格式字符串（兼容旧调用）
+     */
+    private String noteToJson(Note note) {
+        com.google.gson.Gson gson = new com.google.gson.GsonBuilder().setPrettyPrinting().create();
+        return gson.toJson(noteToJsonObject(note));
+    }
+
+    /**
+     * 导出完整谱面JSON（包含metadata和groupEvents）
+     */
+    private String exportFullChartJson() {
+        com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+        root.addProperty("version", "1.0.0");
+
+        com.google.gson.JsonObject metadata = new com.google.gson.JsonObject();
+        String id = songNameField != null ? songNameField.getText().trim() : "";
+        metadata.addProperty("id", id);
+        metadata.addProperty("title", songNameField != null ? songNameField.getText().trim() : "");
+        metadata.addProperty("artist", composerField != null ? composerField.getText().trim() : "");
+        metadata.addProperty("charter", chartAuthorField != null ? chartAuthorField.getText().trim() : "");
+
+        com.google.gson.JsonObject difficulty = new com.google.gson.JsonObject();
+        difficulty.addProperty("name", difficultyField != null ? difficultyField.getText().trim() : "");
+        difficulty.addProperty("level", parseDifficultyLevel());
+        difficulty.addProperty("color", parseDifficultyColor());
+        metadata.add("difficulty", difficulty);
+
+        metadata.addProperty("audio", "cr." + id);
+        metadata.addProperty("duration", parseDurationSeconds());
+        metadata.addProperty("offset", parseOffsetValue());
+        metadata.addProperty("bpm", parseBpmValue());
+
+        root.add("metadata", metadata);
+
+        // 保留编辑器中已有的 groupEvents，不覆盖
+        com.google.gson.JsonArray existingGroupEvents = new com.google.gson.JsonArray();
+        if (chartEditorPanel != null) {
+            try {
+                String editorText = chartEditorPanel.getText().trim();
+                if (!editorText.isEmpty()) {
+                    com.google.gson.JsonElement el = new com.google.gson.Gson().fromJson(editorText, com.google.gson.JsonElement.class);
+                    if (el.isJsonObject() && el.getAsJsonObject().has("groupEvents")) {
+                        existingGroupEvents = el.getAsJsonObject().getAsJsonArray("groupEvents");
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        root.add("groupEvents", existingGroupEvents);
+
+        com.google.gson.JsonArray notesArray = new com.google.gson.JsonArray();
+        for (Note note : noteManager.getNotes()) {
+            notesArray.add(noteToJsonObject(note));
+        }
+        root.add("notes", notesArray);
+
+        return new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(root);
+    }
+
+    private int parseDurationSeconds() {
+        try {
+            return Integer.parseInt(durationField != null ? durationField.getText().trim() : "0");
+        } catch (NumberFormatException e) { return 0; }
+    }
+
+    private int parseOffsetValue() {
+        try {
+            return Integer.parseInt(offsetField != null ? offsetField.getText().trim() : "0");
+        } catch (NumberFormatException e) { return 0; }
+    }
+
+    private int parseBpmValue() {
+        try {
+            return Integer.parseInt(bpmField != null ? bpmField.getText().trim() : "120");
+        } catch (NumberFormatException e) { return 120; }
+    }
+
+    private int parseDifficultyLevel() {
+        try {
+            int level = Integer.parseInt(difficultyLevelField != null ? difficultyLevelField.getText().trim() : "1");
+            return Math.max(1, Math.min(15, level));
+        } catch (NumberFormatException e) { return 1; }
+    }
+
+    private String parseDifficultyColor() {
+        if (difficultyColorCombo == null) return "&b";
+        String selected = (String) difficultyColorCombo.getSelectedItem();
+        if (selected == null) return "&b";
+        // 提取颜色代码部分（如 "&b (AQUA)" → "&b"）
+        int spaceIdx = selected.indexOf(' ');
+        return spaceIdx > 0 ? selected.substring(0, spaceIdx) : selected;
+    }
+
+    /**
+     * 更新铺面编辑器为完整JSON格式
+     */
+    private void updateChartLogJson() {
+        if (chartEditorPanel == null) return;
+        chartEditorPanel.setText(exportFullChartJson());
     }
 
     /**
@@ -2718,34 +3011,150 @@ public class MainWindow extends JFrame {
         int centerY = panel.getHeight() / 2;
         int n = displayBeatsCount - 1;
 
-        // 遍历所有可见的音符，检查鼠标是否点击在音符上
+        // 遍历所有可见音符，优先返回渲染在最上层（k最小，progress最大）的命中音符
+        Note bestNote = null;
+        double bestK = Double.MAX_VALUE;
         for (Note note : notesToShow) {
-            double noteBeat = beatCalculator.microsecondsToBeats(note.getTimeMicroseconds());
+            double noteBeat = Math.round(beatCalculator.microsecondsToBeats(note.getTimeMicroseconds()));
             double k = noteBeat - currentBeat;
             if (k < 0 || k > n) continue;
 
-            // 计算音符的显示位置和大小（与paintComponent中的逻辑一致）
             double progress = (n == 0) ? 1.0 : (n - k) / n;
             double x = note.getX() * 100;
             double y = -note.getY() * 100;
-            double x0 = x / 5.0;
-            double y0 = y / 5.0;
-            double cx = x0 + (x - x0) * progress;
-            double cy = y0 + (y - y0) * progress;
+            double cx = x / 5.0 + (x - x / 5.0) * progress;
+            double cy = y / 5.0 + (y - y / 5.0) * progress;
             double size = 20 + (100 - 20) * progress;
 
-            // 计算音符的屏幕坐标
             int noteScreenX = (int)(centerX + cx);
             int noteScreenY = (int)(centerY + cy);
 
-            // 检查鼠标是否在音符的矩形范围内
             if (mouseX >= noteScreenX - size/2 && mouseX <= noteScreenX + size/2 &&
                 mouseY >= noteScreenY - size/2 && mouseY <= noteScreenY + size/2) {
-                return note;
+                if (k < bestK) {
+                    bestK = k;
+                    bestNote = note;
+                }
             }
         }
 
-        return null;
+        return bestNote;
+    }
+
+    private void showNoteContextMenu(JPanel panel, int x, int y, Note note) {
+        isContextMenuOpen = true;
+        JPopupMenu menu = new JPopupMenu();
+        menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+            public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) { isContextMenuOpen = false; }
+            public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) { isContextMenuOpen = false; }
+            public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {}
+        });
+
+        if (note == null) {
+            JMenuItem hint = new JMenuItem("未点击到音符");
+            hint.setEnabled(false);
+            menu.add(hint);
+            menu.show(panel, x, y);
+            return;
+        }
+
+        // 删除
+        JMenuItem deleteItem = new JMenuItem("删除音符");
+        deleteItem.addActionListener(e -> {
+            noteManager.removeNote(note);
+            updateChartLogJson();
+            panel.repaint();
+            logManager.log("已删除音符");
+        });
+        menu.add(deleteItem);
+
+        // 定位到 JSON
+        JMenuItem locateItem = new JMenuItem("定位到 JSON");
+        locateItem.addActionListener(e -> locateNoteInJson(note));
+        menu.add(locateItem);
+
+        // 修改方向（EXECUTION 无方向）
+        if (note.getDirection() != null || note.hasCoordinates() || note.isFlick()) {
+            JMenu faceMenu = new JMenu("修改方向");
+            for (String dir : new String[]{"w", "a", "s", "d"}) {
+                JMenuItem dirItem = new JMenuItem(dir.toUpperCase());
+                dirItem.addActionListener(e -> {
+                    note.setDirection(dir);
+                    updateChartLogJson();
+                    panel.repaint();
+                });
+                faceMenu.add(dirItem);
+            }
+            menu.add(faceMenu);
+        }
+
+        // 切换 glow（EXECUTION 无 glow）
+        if (!note.isExecution()) {
+            JCheckBoxMenuItem glowItem = new JCheckBoxMenuItem("发光 (glow)", note.isGlowing());
+            glowItem.addActionListener(e -> {
+                note.setGlowing(glowItem.isSelected());
+                updateChartLogJson();
+                panel.repaint();
+            });
+            menu.add(glowItem);
+        }
+
+        menu.show(panel, x, y);
+    }
+
+    private void locateNoteInJson(Note note) {
+        String json = chartEditorPanel.getText();
+        if (json == null || json.isEmpty()) return;
+
+        double targetTime = note.getTimeMicroseconds() / 1_000_000.0;
+        String typeName = note.getType().getJsonName();
+        // 5ms 容差，覆盖浮点精度误差和手动微调
+        double tolerance = 0.005;
+
+        int searchFrom = 0;
+        int bestIdx = -1;
+        double bestDiff = Double.MAX_VALUE;
+
+        while (searchFrom < json.length()) {
+            int typeIdx = json.indexOf("\"type\": \"" + typeName + "\"", searchFrom);
+            if (typeIdx < 0) break;
+
+            // 只在 typeIdx 之后查找 "time"，避免匹配到上一个音符块的值
+            int blockEnd = Math.min(json.length(), typeIdx + 200);
+            String block = json.substring(typeIdx, blockEnd);
+
+            // 提取 "time": <value> 的数值
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\"time\":\\s*([0-9.eE+\\-]+)").matcher(block);
+            if (m.find()) {
+                try {
+                    double t = Double.parseDouble(m.group(1));
+                    double diff = Math.abs(t - targetTime);
+                    if (diff <= tolerance) {
+                        boolean glowMatch = note.isExecution() || note.isFlick() ||
+                                block.contains("\"glowing\": " + note.isGlowing());
+                        boolean posMatch = !note.hasCoordinates() ||
+                                (block.contains(String.valueOf(note.getX())) &&
+                                 block.contains(String.valueOf(note.getY())) &&
+                                 (!note.isDouble() ||
+                                     (block.contains(String.valueOf(note.getX2())) &&
+                                      block.contains(String.valueOf(note.getY2())))));
+                        if (glowMatch && posMatch && diff < bestDiff) {
+                            bestDiff = diff;
+                            bestIdx = typeIdx;
+                        }
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+            searchFrom = typeIdx + 1;
+        }
+
+        if (bestIdx >= 0) {
+            chartEditorPanel.getTextArea().setCaretPosition(bestIdx);
+            chartEditorPanel.getTextArea().requestFocusInWindow();
+        } else {
+            logManager.log("未能在 JSON 中定位该音符");
+        }
     }
 
     /**
@@ -2776,17 +3185,20 @@ public class MainWindow extends JFrame {
      * 从JSON文本重载音符
      */
     private void reloadNotesFromJson() throws Exception {
-        // 获取当前歌曲名称作为文件名
         String songName = songNameField != null ? songNameField.getText().trim() : "chart";
         if (songName.isEmpty()) {
             songName = "chart";
         }
 
-        // 保存当前铺面到JSON文件
-        String jsonText = chartLogTextArea.getText().trim();
+        String jsonText = chartEditorPanel.getText().trim();
         if (jsonText.isEmpty()) {
             noteManager.clearNotes();
             return;
+        }
+
+        // 验证 JSON 格式
+        if (!chartEditorPanel.validateJson()) {
+            throw new Exception("JSON 格式错误");
         }
 
         // 创建charts目录（如果不存在）
@@ -2806,7 +3218,54 @@ public class MainWindow extends JFrame {
         noteManager.clearNotes();
 
         com.google.gson.Gson gson = new com.google.gson.Gson();
-        com.google.gson.JsonArray notesArray = gson.fromJson(jsonText, com.google.gson.JsonArray.class);
+        com.google.gson.JsonElement rootElement = gson.fromJson(jsonText, com.google.gson.JsonElement.class);
+
+        com.google.gson.JsonArray notesArray = null;
+
+        if (rootElement.isJsonObject()) {
+            com.google.gson.JsonObject root = rootElement.getAsJsonObject();
+            // 完整谱面格式：提取 notes 数组
+            if (root.has("notes")) {
+                notesArray = root.getAsJsonArray("notes");
+            }
+            // 同步 metadata 到 UI（保存音频位置防止 offsetField 监听器重置进度）
+            long savedAudioTime = musicPlayer != null ? musicPlayer.getCurrentTimeMicroseconds() : 0;
+            if (root.has("metadata")) {
+                com.google.gson.JsonObject metadata = root.getAsJsonObject("metadata");
+                if (metadata.has("title") && songNameField != null)
+                    songNameField.setText(metadata.get("title").getAsString());
+                if (metadata.has("artist") && composerField != null)
+                    composerField.setText(metadata.get("artist").getAsString());
+                if (metadata.has("charter") && chartAuthorField != null)
+                    chartAuthorField.setText(metadata.get("charter").getAsString());
+                if (metadata.has("bpm") && bpmField != null)
+                    bpmField.setText(String.valueOf(metadata.get("bpm").getAsInt()));
+                if (metadata.has("duration") && durationField != null)
+                    durationField.setText(String.valueOf(metadata.get("duration").getAsInt()));
+                if (metadata.has("offset") && offsetField != null)
+                    offsetField.setText(String.valueOf(metadata.get("offset").getAsInt()));
+                if (metadata.has("difficulty")) {
+                    com.google.gson.JsonObject diff = metadata.getAsJsonObject("difficulty");
+                    if (diff.has("name") && difficultyField != null)
+                        difficultyField.setText(diff.get("name").getAsString());
+                    if (diff.has("level") && difficultyLevelField != null)
+                        difficultyLevelField.setText(String.valueOf(diff.get("level").getAsInt()));
+                    if (diff.has("color") && difficultyColorCombo != null) {
+                        String color = diff.get("color").getAsString();
+                        for (int ci = 0; ci < difficultyColorCombo.getItemCount(); ci++) {
+                            if (difficultyColorCombo.getItemAt(ci).startsWith(color)) {
+                                difficultyColorCombo.setSelectedIndex(ci);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (musicPlayer != null) musicPlayer.seek(savedAudioTime);
+        } else if (rootElement.isJsonArray()) {
+            // 纯 notes 数组格式（兼容旧格式）
+            notesArray = rootElement.getAsJsonArray();
+        }
 
         if (notesArray == null || notesArray.isEmpty()) {
             logManager.log("铺面为空");
@@ -2835,19 +3294,36 @@ public class MainWindow extends JFrame {
             long timeMicroseconds = (long)(time * 1_000_000);
 
             switch (type.toLowerCase()) {
-                case "execution":
-                    return new Note(NoteType.EXECUTION, timeMicroseconds);
+                case "execution": {
+                    Note note = new Note(NoteType.EXECUTION, timeMicroseconds);
+                    if (noteObj.has("actions")) {
+                        note.setActions(noteObj.getAsJsonArray("actions"));
+                    }
+                    return note;
+                }
 
                 case "flick":
+                case "fake_flick": {
                     String face = noteObj.get("face").getAsString();
                     String turn = noteObj.get("turn").getAsString();
                     boolean glowing = noteObj.get("glowing").getAsBoolean();
-                    NoteType flickType = "left".equals(turn) ? NoteType.FLICK_LEFT : NoteType.FLICK_RIGHT;
-                    return new Note(flickType, timeMicroseconds, face, turn, glowing);
+                    NoteType flickType;
+                    if ("fake_flick".equals(type.toLowerCase())) {
+                        flickType = NoteType.FAKE_FLICK;
+                    } else {
+                        flickType = "left".equals(turn) ? NoteType.FLICK_LEFT : NoteType.FLICK_RIGHT;
+                    }
+                    Note note = new Note(flickType, timeMicroseconds, face, turn, glowing);
+                    parseTagsFromJson(noteObj, note);
+                    parseEventsFromJson(noteObj, note);
+                    return note;
+                }
 
                 case "double":
-                    face = noteObj.get("face").getAsString();
-                    glowing = noteObj.get("glowing").getAsBoolean();
+                case "fake_double":
+                case "mine_double": {
+                    String face = noteObj.get("face").getAsString();
+                    boolean glowing = noteObj.get("glowing").getAsBoolean();
                     com.google.gson.JsonArray positions = noteObj.getAsJsonArray("positions");
                     if (positions != null && positions.size() >= 2) {
                         com.google.gson.JsonObject pos1 = positions.get(0).getAsJsonObject();
@@ -2856,19 +3332,29 @@ public class MainWindow extends JFrame {
                         double y1 = pos1.get("y").getAsDouble();
                         double x2 = pos2.get("x").getAsDouble();
                         double y2 = pos2.get("y").getAsDouble();
-//                        logManager.log(String.format("解析DOUBLE音符: x1=%.2f, y1=%.2f, x2=%.2f, y2=%.2f", x1, y1, x2, y2));
-                        Note doubleNote = new Note(x1, y1, x2, y2, NoteType.DOUBLE, timeMicroseconds, face, glowing);
-//                        logManager.log(String.format("创建DOUBLE音符: getX()=%.2f, getY()=%.2f, getX2()=%.2f, getY2()=%.2f",
-//                            doubleNote.getX(), doubleNote.getY(), doubleNote.getX2(), doubleNote.getY2()));
-                        return doubleNote;
+                        NoteType noteType = switch (type.toLowerCase()) {
+                            case "fake_double" -> NoteType.FAKE_DOUBLE;
+                            case "mine_double" -> NoteType.MINE_DOUBLE;
+                            default -> NoteType.DOUBLE;
+                        };
+                        Note note = new Note(x1, y1, x2, y2, noteType, timeMicroseconds, face, glowing);
+                        parseTagsFromJson(noteObj, note);
+                        parseEventsFromJson(noteObj, note);
+                        return note;
                     }
                     break;
+                }
 
                 case "tap":
                 case "drag":
                 case "hold":
-                    face = noteObj.get("face").getAsString();
-                    glowing = noteObj.get("glowing").getAsBoolean();
+                case "fake_tap":
+                case "fake_drag":
+                case "fake_hold":
+                case "mine_tap":
+                case "mine_drag": {
+                    String face = noteObj.get("face").getAsString();
+                    boolean glowing = noteObj.get("glowing").getAsBoolean();
                     com.google.gson.JsonObject position = noteObj.getAsJsonObject("position");
                     if (position != null) {
                         double x = position.get("x").getAsDouble();
@@ -2877,17 +3363,46 @@ public class MainWindow extends JFrame {
                             case "tap" -> NoteType.TAP;
                             case "drag" -> NoteType.DRAG;
                             case "hold" -> NoteType.HOLD;
+                            case "fake_tap" -> NoteType.FAKE_TAP;
+                            case "fake_drag" -> NoteType.FAKE_DRAG;
+                            case "fake_hold" -> NoteType.FAKE_HOLD;
+                            case "mine_tap" -> NoteType.MINE_TAP;
+                            case "mine_drag" -> NoteType.MINE_DRAG;
                             default -> NoteType.TAP;
                         };
-                        return new Note(x, y, noteType, timeMicroseconds, face, glowing);
+                        Note note = new Note(x, y, noteType, timeMicroseconds, face, glowing);
+                        parseTagsFromJson(noteObj, note);
+                        parseEventsFromJson(noteObj, note);
+                        return note;
                     }
                     break;
+                }
             }
         } catch (Exception e) {
             logManager.log("解析音符失败: " + e.getMessage());
             e.printStackTrace();
         }
         return null;
+    }
+
+    private void parseTagsFromJson(com.google.gson.JsonObject noteObj, Note note) {
+        if (noteObj.has("tags")) {
+            com.google.gson.JsonArray tagsArray = noteObj.getAsJsonArray("tags");
+            for (int i = 0; i < tagsArray.size(); i++) {
+                note.getTags().add(tagsArray.get(i).getAsString());
+            }
+        } else if (noteObj.has("tag")) {
+            String tag = noteObj.get("tag").getAsString();
+            if (!tag.isEmpty()) {
+                note.getTags().add(tag);
+            }
+        }
+    }
+
+    private void parseEventsFromJson(com.google.gson.JsonObject noteObj, Note note) {
+        if (noteObj.has("events")) {
+            note.setEvents(noteObj.getAsJsonObject("events"));
+        }
     }
 
     /**
